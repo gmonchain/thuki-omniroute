@@ -29,13 +29,14 @@ export function IntroStep({ onComplete }: Props) {
         transition={{ type: 'spring', stiffness: 300, damping: 28 }}
         style={{
           width: 420,
-          background:
-            'radial-gradient(ellipse 80% 55% at 50% 0%, rgba(255,141,92,0.14) 0%, rgba(28,24,20,0.97) 60%), rgba(28,24,20,0.97)',
-          border: '1px solid rgba(255, 141, 92, 0.2)',
+          background: 'var(--color-surface-elevated)',
+          border: '1px solid var(--color-surface-border)',
           borderRadius: 24,
           padding: '32px 26px 26px',
-          boxShadow: '0 0 40px rgba(255,100,40,0.07)',
+          boxShadow: 'var(--shadow-chat)',
           position: 'relative',
+          backdropFilter: 'blur(10px)',
+          WebkitBackdropFilter: 'blur(10px)',
         }}
       >
         {/* Logo */}
@@ -139,15 +140,15 @@ export function IntroStep({ onComplete }: Props) {
             display: 'block',
             width: '100%',
             padding: '12px',
-            background: 'linear-gradient(135deg, #ff8d5c 0%, #d45a1e 100%)',
-            color: 'white',
+            background: 'white',
+            color: 'black',
             fontSize: 14,
             fontWeight: 600,
             border: 'none',
             borderRadius: 12,
             cursor: 'pointer',
             letterSpacing: '-0.1px',
-            boxShadow: '0 4px 20px rgba(255,100,40,0.28)',
+            boxShadow: 'var(--shadow-chat)',
             textAlign: 'center',
           }}
         >
@@ -261,11 +262,11 @@ function MonoChip({ children }: { children: React.ReactNode }) {
       style={{
         display: 'inline-block',
         padding: '1px 6px',
-        background: 'rgba(255,141,92,0.08)',
-        border: '1px solid rgba(255,141,92,0.15)',
+        background: 'rgba(100, 100, 100, 0.1)',
+        border: '1px solid rgba(100, 100, 100, 0.2)',
         borderRadius: 4,
         fontSize: 11,
-        color: 'rgba(255,141,92,0.75)',
+        color: 'var(--color-text-secondary)',
         fontFamily: "'SF Mono', 'Fira Mono', monospace",
         lineHeight: 1.5,
         verticalAlign: 'middle',

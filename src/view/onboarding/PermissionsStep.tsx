@@ -274,16 +274,17 @@ export function PermissionsStep({ onNext }: PermissionsStepProps) {
         transition={{ type: 'spring', stiffness: 300, damping: 28 }}
         style={{
           width: 420,
-          background:
-            'radial-gradient(ellipse 80% 55% at 50% 0%, rgba(255,141,92,0.14) 0%, rgba(28,24,20,0.97) 60%), rgba(28,24,20,0.97)',
-          border: '1px solid rgba(255, 141, 92, 0.2)',
+          background: 'var(--color-surface-elevated)',
+          border: '1px solid var(--color-surface-border)',
           borderRadius: 24,
           padding: '32px 26px 26px',
           // Drop shadow handled by native macOS (set_has_shadow(true) in
           // show_onboarding_window). CSS provides the warm inner glow only.
-          boxShadow: '0 0 40px rgba(255,100,40,0.07)',
+          boxShadow: 'var(--shadow-chat)',
           position: 'relative',
           overflow: 'hidden',
+          backdropFilter: 'blur(10px)',
+          WebkitBackdropFilter: 'blur(10px)',
         }}
       >
         {/* Top edge highlight */}
@@ -295,7 +296,7 @@ export function PermissionsStep({ onNext }: PermissionsStepProps) {
             right: 0,
             height: 1,
             background:
-              'linear-gradient(90deg, transparent, rgba(255,141,92,0.4), transparent)',
+              'linear-gradient(90deg, transparent, var(--color-surface-border), transparent)',
           }}
         />
 
@@ -356,8 +357,8 @@ export function PermissionsStep({ onNext }: PermissionsStepProps) {
                 justifyContent: 'center',
                 background: accessibilityGranted
                   ? 'rgba(34,197,94,0.12)'
-                  : 'rgba(255,141,92,0.12)',
-                border: `1px solid ${accessibilityGranted ? 'rgba(34,197,94,0.2)' : 'rgba(255,141,92,0.25)'}`,
+                  : 'rgba(100, 100, 100, 0.12)',
+                border: `1px solid ${accessibilityGranted ? 'rgba(34,197,94,0.2)' : 'var(--color-surface-border)'}`,
               }}
             >
               {accessibilityGranted ? <CheckIcon /> : <KeyboardIcon />}
@@ -397,9 +398,9 @@ export function PermissionsStep({ onNext }: PermissionsStepProps) {
                 alignItems: 'center',
                 justifyContent: 'center',
                 background: accessibilityGranted
-                  ? 'rgba(255,141,92,0.12)'
+                  ? 'rgba(100, 100, 100, 0.12)'
                   : 'rgba(255,255,255,0.04)',
-                border: `1px solid ${accessibilityGranted ? 'rgba(255,141,92,0.25)' : 'rgba(255,255,255,0.06)'}`,
+                border: `1px solid ${accessibilityGranted ? 'var(--color-surface-border)' : 'rgba(255,255,255,0.06)'}`,
               }}
             >
               <ScreenIcon active={accessibilityGranted} />
@@ -463,19 +464,19 @@ export function PermissionsStep({ onNext }: PermissionsStepProps) {
                     onNext ? 'Continue to API Setup' : 'Quit and Reopen Thuki'
                   }
                 >
-                  {onNext ? 'Tiếp tục' : 'Quit & Reopen Thuki'}
+                  {onNext ? 'Continue' : 'Quit & Reopen Thuki'}
                 </CTAButton>
                 <p
                   style={{
                     textAlign: 'center',
                     fontSize: 11,
-                    color: 'rgba(107,102,96,0.8)',
+                    color: 'var(--color-text-secondary)',
                     lineHeight: 1.4,
                     margin: 0,
                   }}
                 >
                   {onNext
-                    ? 'Tiếp tục đến thiết lập kết nối AI'
+                    ? 'Continue to API setup'
                     : 'macOS requires a restart for Screen Recording to take effect'}
                 </p>
               </>
@@ -495,6 +496,7 @@ interface CTAButtonProps {
   'aria-label'?: string;
   loading?: boolean;
   secondary?: boolean;
+  primary?: boolean;
   children: React.ReactNode;
 }
 
@@ -505,6 +507,7 @@ export function CTAButton({
   'aria-label': ariaLabel,
   loading,
   secondary = false,
+  primary = false,
   children,
 }: CTAButtonProps) {
   const [hovered, setHovered] = useState(false);
@@ -527,10 +530,12 @@ export function CTAButton({
         padding: '13px',
         background: secondary
           ? 'rgba(255,255,255,0.06)'
-          : isDisabled
-            ? 'rgba(255,141,92,0.4)'
-            : 'linear-gradient(135deg, #ff8d5c 0%, #d45a1e 100%)',
-        color: secondary ? '#f0f0f2' : 'white',
+          : primary
+            ? 'white'
+            : isDisabled
+              ? 'rgba(100, 100, 100, 0.4)'
+              : 'white',
+        color: secondary ? '#f0f0f2' : primary ? 'black' : 'black',
         fontSize: 14,
         fontWeight: 600,
         border: secondary ? '1px solid rgba(255,255,255,0.12)' : 'none',
@@ -543,7 +548,7 @@ export function CTAButton({
           ? 'none'
           : secondary
             ? 'none'
-            : '0 4px 24px rgba(255,100,40,0.35), 0 1px 0 rgba(255,255,255,0.12) inset',
+            : 'var(--shadow-chat), 0 1px 0 rgba(255,255,255,0.12) inset',
         filter: hovered && !isDisabled ? 'brightness(1.1)' : 'none',
         transition: 'filter 0.15s ease',
       }}
@@ -564,13 +569,13 @@ function StepCard({ active, done, children }: StepCardProps) {
   const borderColor = done
     ? 'rgba(34,197,94,0.2)'
     : active
-      ? 'rgba(255,141,92,0.4)'
+      ? 'var(--color-surface-border)'
       : 'rgba(255,255,255,0.06)';
 
   const background = done
     ? 'rgba(34,197,94,0.05)'
     : active
-      ? 'rgba(255,141,92,0.07)'
+      ? 'rgba(100, 100, 100, 0.07)'
       : 'rgba(255,255,255,0.03)';
 
   return (
@@ -585,7 +590,7 @@ function StepCard({ active, done, children }: StepCardProps) {
         background,
         boxShadow:
           active && !done
-            ? '0 0 20px rgba(255,141,92,0.08), inset 0 1px 0 rgba(255,141,92,0.1)'
+            ? '0 0 10px rgba(100, 100, 100, 0.1), inset 0 1px 0 rgba(100, 100, 100, 0.1)'
             : 'none',
       }}
     >

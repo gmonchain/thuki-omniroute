@@ -15,7 +15,7 @@ export function ApiSetupStep({ onBack }: Props) {
 
   const handleSave = async () => {
     if (!apiKey.trim()) {
-      setError('API Key là bắt buộc');
+      setError('API Key is required');
       return;
     }
 
@@ -32,7 +32,7 @@ export function ApiSetupStep({ onBack }: Props) {
       // Don't call onComplete since finish_onboarding will handle the transition
       setLoading(false);
     } catch (err) {
-      setError('Lưu cấu hình thất bại. Vui lòng thử lại.');
+      setError('Failed to save configuration. Please try again.');
       setLoading(false);
     }
   };
@@ -44,14 +44,15 @@ export function ApiSetupStep({ onBack }: Props) {
       transition={{ type: 'spring', stiffness: 300, damping: 28 }}
       style={{
         width: 420,
-        background:
-          'radial-gradient(ellipse 80% 55% at 50% 0%, rgba(255,141,92,0.14) 0%, rgba(28,24,20,0.97) 60%), rgba(28,24,20,0.97)',
-        border: '1px solid rgba(255, 141, 92, 0.2)',
+        background: 'var(--color-surface-elevated)',
+        border: '1px solid var(--color-surface-border)',
         borderRadius: 24,
         padding: '32px 26px 26px',
-        boxShadow: '0 0 40px rgba(255,100,40,0.07)',
+        boxShadow: 'var(--shadow-chat)',
         position: 'relative',
         overflow: 'hidden',
+        backdropFilter: 'blur(10px)',
+        WebkitBackdropFilter: 'blur(10px)',
       }}
     >
       {/* Header */}
@@ -66,7 +67,7 @@ export function ApiSetupStep({ onBack }: Props) {
             margin: '0 0 8px',
           }}
         >
-          Thiết lập kết nối AI
+          AI Connection Setup
         </h1>
         <p
           style={{
@@ -76,7 +77,7 @@ export function ApiSetupStep({ onBack }: Props) {
             margin: 0,
           }}
         >
-          Nhập thông tin để kết nối với nhà cung cấp AI
+          Enter information to connect to the AI provider
         </p>
       </div>
 
@@ -126,8 +127,7 @@ export function ApiSetupStep({ onBack }: Props) {
               margin: '6px 0 0 0',
             }}
           >
-            Đường dẫn đến API của nhà cung cấp AI (ví dụ: OpenRouter, OpenAI,
-            v.v.)
+            Path to the AI provider's API (e.g., OpenRouter, OpenAI, etc.)
           </p>
         </div>
 
@@ -149,7 +149,7 @@ export function ApiSetupStep({ onBack }: Props) {
             type="password"
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
-            placeholder="Nhập API Key của bạn"
+            placeholder="Enter your API Key"
             style={{
               width: '100%',
               padding: '10px 12px',
@@ -168,7 +168,7 @@ export function ApiSetupStep({ onBack }: Props) {
               margin: '6px 0 0 0',
             }}
           >
-            Khóa bảo mật để xác thực với nhà cung cấp AI
+            Security key to authenticate with the AI provider
           </p>
         </div>
       </div>
@@ -191,13 +191,23 @@ export function ApiSetupStep({ onBack }: Props) {
       )}
 
       {/* Buttons */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        <CTAButton onClick={handleSave} disabled={loading} loading={loading}>
-          {loading ? 'Đang lưu...' : 'Tiếp tục'}
+      <div style={{ display: 'flex', flexDirection: 'row', gap: 8 }}>
+        <CTAButton
+          onClick={onBack}
+          disabled={loading}
+          secondary
+          style={{ flex: 1 }}
+        >
+          Go Back
         </CTAButton>
-
-        <CTAButton onClick={onBack} disabled={loading} secondary>
-          Quay lại
+        <CTAButton
+          onClick={handleSave}
+          disabled={loading}
+          loading={loading}
+          primary
+          style={{ flex: 1 }}
+        >
+          {loading ? 'Saving...' : 'Continue'}
         </CTAButton>
       </div>
 
@@ -211,8 +221,8 @@ export function ApiSetupStep({ onBack }: Props) {
           margin: '16px 0 0 0',
         }}
       >
-        Bạn có thể thay đổi cài đặt này sau trong ứng dụng bằng lệnh /endpoint
-        và /api-key
+        You can change these settings later in the app using the /endpoint and
+        /api-key commands
       </p>
     </motion.div>
   );
