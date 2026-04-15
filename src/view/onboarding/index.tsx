@@ -1,7 +1,9 @@
+import { useState, useEffect } from 'react';
 import { IntroStep } from './IntroStep';
 import { PermissionsStep } from './PermissionsStep';
+import { ApiSetupStep } from './steps/ApiSetupStep';
 
-export type OnboardingStage = 'permissions' | 'intro';
+export type OnboardingStage = 'permissions' | 'api-setup' | 'intro';
 
 interface Props {
   stage: OnboardingStage;
@@ -20,8 +22,24 @@ interface Props {
  * so this component is never rendered.
  */
 export function OnboardingView({ stage, onComplete }: Props) {
-  if (stage === 'intro') {
+  const [currentStage, setCurrentStage] = useState(stage);
+
+  useEffect(() => {
+    setCurrentStage(stage);
+  }, [stage]);
+
+  if (currentStage === 'intro') {
     return <IntroStep onComplete={onComplete} />;
   }
-  return <PermissionsStep />;
+
+  if (currentStage === 'api-setup') {
+    return (
+      <ApiSetupStep
+        onComplete={onComplete}
+        onBack={() => setCurrentStage('permissions')}
+      />
+    );
+  }
+
+  return <PermissionsStep onNext={() => setCurrentStage('api-setup')} />;
 }

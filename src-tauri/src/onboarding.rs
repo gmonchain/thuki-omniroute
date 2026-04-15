@@ -23,6 +23,7 @@ const STAGE_KEY: &str = "onboarding_stage";
 #[serde(rename_all = "lowercase")]
 pub enum OnboardingStage {
     Permissions,
+    ApiSetup,
     Intro,
     Complete,
 }
@@ -41,6 +42,7 @@ pub fn get_stage(conn: &Connection) -> rusqlite::Result<OnboardingStage> {
 pub fn set_stage(conn: &Connection, stage: &OnboardingStage) -> rusqlite::Result<()> {
     let value = match stage {
         OnboardingStage::Permissions => "permissions",
+        OnboardingStage::ApiSetup => "api-setup",
         OnboardingStage::Intro => "intro",
         OnboardingStage::Complete => "complete",
     };
@@ -53,7 +55,7 @@ pub fn set_stage(conn: &Connection, stage: &OnboardingStage) -> rusqlite::Result
 /// Reads only the persisted stage: no permission API calls. Permission APIs
 /// (CGPreflightScreenCaptureAccess) can return stale results immediately after
 /// a process restart on macOS 15+. PermissionsStep owns live permission
-/// detection via its own polling checks. quit_and_relaunch writes "intro" to
+/// detection via its own polling checks. quit_and_relaunch writes "api-setup" to
 /// the DB before restarting so this path sees the correct stage on next launch.
 pub fn compute_startup_stage(conn: &Connection) -> rusqlite::Result<Option<OnboardingStage>> {
     match get_stage(conn)? {
@@ -69,6 +71,12 @@ pub fn compute_startup_stage(conn: &Connection) -> rusqlite::Result<Option<Onboa
 /// of the Tauri command wrapper.
 pub fn mark_complete(conn: &Connection) -> rusqlite::Result<()> {
     set_stage(conn, &OnboardingStage::Complete)
+}
+
+/// Persists the `ApiSetup` stage, indicating that the user has granted permissions
+/// and should proceed to API setup.
+pub fn mark_api_setup(conn: &Connection) -> rusqlite::Result<()> {
+    set_stage(conn, &OnboardingStage::ApiSetup)
 }
 
 // ─── Tests ──────────────────────────────────────────────────────────────────

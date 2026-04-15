@@ -153,7 +153,7 @@ pub fn check_screen_recording_tcc_granted() -> bool {
 #[cfg_attr(coverage_nightly, coverage(off))]
 pub fn quit_and_relaunch(app_handle: tauri::AppHandle, db: tauri::State<crate::history::Database>) {
     if let Ok(conn) = db.0.lock() {
-        let _ = crate::onboarding::set_stage(&conn, &crate::onboarding::OnboardingStage::Intro);
+        let _ = crate::onboarding::set_stage(&conn, &crate::onboarding::OnboardingStage::ApiSetup);
     }
     app_handle.restart();
 }

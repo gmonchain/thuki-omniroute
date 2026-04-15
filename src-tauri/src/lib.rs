@@ -386,7 +386,7 @@ fn notify_frontend_ready(app_handle: tauri::AppHandle, db: tauri::State<history:
                 let stage = onboarding::get_stage(&conn)
                     .unwrap_or(onboarding::OnboardingStage::Permissions);
 
-                // The "intro" stage means quit_and_relaunch already wrote it
+                // The "intro" or "api-setup" stage means quit_and_relaunch already wrote it
                 // before restarting, confirming the user just granted all
                 // permissions. Skip the live permission check here: on macOS 15+
                 // CGPreflightScreenCaptureAccess can return a stale false negative
@@ -394,6 +394,11 @@ fn notify_frontend_ready(app_handle: tauri::AppHandle, db: tauri::State<history:
                 // back to the permissions screen.
                 if matches!(stage, onboarding::OnboardingStage::Intro) {
                     show_onboarding_window(&app_handle, onboarding::OnboardingStage::Intro);
+                    return;
+                }
+
+                if matches!(stage, onboarding::OnboardingStage::ApiSetup) {
+                    show_onboarding_window(&app_handle, onboarding::OnboardingStage::ApiSetup);
                     return;
                 }
 
@@ -411,11 +416,18 @@ fn notify_frontend_ready(app_handle: tauri::AppHandle, db: tauri::State<history:
                     return;
                 }
 
-                // All permissions granted. If not yet complete, show intro.
+                // All permissions granted. If not yet complete, show api setup, then intro.
                 if !matches!(stage, onboarding::OnboardingStage::Complete) {
-                    let _ = onboarding::set_stage(&conn, &onboarding::OnboardingStage::Intro);
-                    show_onboarding_window(&app_handle, onboarding::OnboardingStage::Intro);
-                    return;
+                    // Check if we should go to API setup or directly to intro
+                    if matches!(stage, onboarding::OnboardingStage::ApiSetup) {
+                        show_onboarding_window(&app_handle, onboarding::OnboardingStage::ApiSetup);
+                        return;
+                    } else {
+                        let _ =
+                            onboarding::set_stage(&conn, &onboarding::OnboardingStage::ApiSetup);
+                        show_onboarding_window(&app_handle, onboarding::OnboardingStage::ApiSetup);
+                        return;
+                    }
                 }
                 // Complete: fall through to show the overlay.
             } else {
@@ -444,7 +456,6 @@ fn finish_onboarding(
     drop(conn);
 
     // Restore panel to overlay configuration and show the Ask Bar.
-    // Must run on the macOS main thread because NSPanel APIs are not thread-safe.
     let handle = app_handle.clone();
     let _ = app_handle.run_on_main_thread(move || {
         // Resize the window back to the collapsed overlay dimensions before

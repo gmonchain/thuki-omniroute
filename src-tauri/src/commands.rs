@@ -448,6 +448,8 @@ pub fn get_api_config() -> serde_json::Value {
     api_config_value()
 }
 
+// Using finish_onboarding directly in the UI instead
+
 /// Updates the runtime API endpoint used for subsequent requests.
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg_attr(not(coverage), tauri::command)]

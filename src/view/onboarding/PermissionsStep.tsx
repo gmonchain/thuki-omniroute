@@ -150,7 +150,11 @@ const Spinner = () => (
  * The outer container is transparent so the rounded panel corners are visible
  * against the macOS desktop.
  */
-export function PermissionsStep() {
+interface PermissionsStepProps {
+  onNext?: () => void;
+}
+
+export function PermissionsStep({ onNext }: PermissionsStepProps) {
   const [accessibilityStatus, setAccessibilityStatus] =
     useState<AccessibilityStatus>('pending');
   const [screenRecordingStatus, setScreenRecordingStatus] =
@@ -456,10 +460,10 @@ export function PermissionsStep() {
             {screenGranted && (
               <>
                 <CTAButton
-                  onClick={handleQuitAndRelaunch}
-                  aria-label="Quit and Reopen Thuki"
+                  onClick={onNext ? onNext : handleQuitAndRelaunch}
+                  aria-label={onNext ? "Continue to API Setup" : "Quit and Reopen Thuki"}
                 >
-                  Quit & Reopen Thuki
+                  {onNext ? "Tiếp tục" : "Quit & Reopen Thuki"}
                 </CTAButton>
                 <p
                   style={{
@@ -470,7 +474,8 @@ export function PermissionsStep() {
                     margin: 0,
                   }}
                 >
-                  macOS requires a restart for Screen Recording to take effect
+                  {onNext ? "Tiếp tục đến thiết lập kết nối AI" : "macOS requires a restart for Screen Recording to take effect"}
+                </p>
                 </p>
               </>
             )}
@@ -484,10 +489,11 @@ export function PermissionsStep() {
 // ─── Sub-components ─────────────────────────────────────────────────────────
 
 interface CTAButtonProps {
-  onClick?: React.MouseEventHandler<HTMLButtonElement>;
+  onClick: () => void;
   disabled?: boolean;
   'aria-label'?: string;
   loading?: boolean;
+  secondary?: boolean;
   children: React.ReactNode;
 }
 
@@ -497,6 +503,7 @@ function CTAButton({
   disabled,
   'aria-label': ariaLabel,
   loading,
+  secondary = false,
   children,
 }: CTAButtonProps) {
   const [hovered, setHovered] = useState(false);
@@ -517,13 +524,15 @@ function CTAButton({
         gap: 8,
         width: '100%',
         padding: '13px',
-        background: isDisabled
-          ? 'rgba(255,141,92,0.4)'
-          : 'linear-gradient(135deg, #ff8d5c 0%, #d45a1e 100%)',
-        color: 'white',
+        background: secondary
+          ? 'rgba(255,255,255,0.06)'
+          : isDisabled
+            ? 'rgba(255,141,92,0.4)'
+            : 'linear-gradient(135deg, #ff8d5c 0%, #d45a1e 100%)',
+        color: secondary ? '#f0f0f2' : 'white',
         fontSize: 14,
         fontWeight: 600,
-        border: 'none',
+        border: secondary ? '1px solid rgba(255,255,255,0.12)' : 'none',
         borderRadius: 14,
         cursor: isDisabled ? 'not-allowed' : 'pointer',
         letterSpacing: '-0.1px',
@@ -531,7 +540,9 @@ function CTAButton({
         opacity: isDisabled ? 0.7 : 1,
         boxShadow: isDisabled
           ? 'none'
-          : '0 4px 24px rgba(255,100,40,0.35), 0 1px 0 rgba(255,255,255,0.12) inset',
+          : secondary
+            ? 'none'
+            : '0 4px 24px rgba(255,100,40,0.35), 0 1px 0 rgba(255,255,255,0.12) inset',
         filter: hovered && !isDisabled ? 'brightness(1.1)' : 'none',
         transition: 'filter 0.15s ease',
       }}
