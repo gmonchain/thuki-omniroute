@@ -461,9 +461,11 @@ export function PermissionsStep({ onNext }: PermissionsStepProps) {
               <>
                 <CTAButton
                   onClick={onNext ? onNext : handleQuitAndRelaunch}
-                  aria-label={onNext ? "Continue to API Setup" : "Quit and Reopen Thuki"}
+                  aria-label={
+                    onNext ? 'Continue to API Setup' : 'Quit and Reopen Thuki'
+                  }
                 >
-                  {onNext ? "Tiếp tục" : "Quit & Reopen Thuki"}
+                  {onNext ? 'Tiếp tục' : 'Quit & Reopen Thuki'}
                 </CTAButton>
                 <p
                   style={{
@@ -474,8 +476,9 @@ export function PermissionsStep({ onNext }: PermissionsStepProps) {
                     margin: 0,
                   }}
                 >
-                  {onNext ? "Tiếp tục đến thiết lập kết nối AI" : "macOS requires a restart for Screen Recording to take effect"}
-                </p>
+                  {onNext
+                    ? 'Tiếp tục đến thiết lập kết nối AI'
+                    : 'macOS requires a restart for Screen Recording to take effect'}
                 </p>
               </>
             )}
