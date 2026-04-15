@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import type { Message } from './useOllama';
+import type { Message } from './useAiChat';
 import type {
   ConversationSummary,
   PersistedMessage,

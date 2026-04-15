@@ -497,6 +497,7 @@ interface CTAButtonProps {
   loading?: boolean;
   secondary?: boolean;
   primary?: boolean;
+  style?: React.CSSProperties;
   children: React.ReactNode;
 }
 
@@ -508,6 +509,7 @@ export function CTAButton({
   loading,
   secondary = false,
   primary = false,
+  style,
   children,
 }: CTAButtonProps) {
   const [hovered, setHovered] = useState(false);
@@ -551,6 +553,7 @@ export function CTAButton({
             : 'var(--shadow-chat), 0 1px 0 rgba(255,255,255,0.12) inset',
         filter: hovered && !isDisabled ? 'brightness(1.1)' : 'none',
         transition: 'filter 0.15s ease',
+        ...style,
       }}
     >
       {loading && <Spinner />}

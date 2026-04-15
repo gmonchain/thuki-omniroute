@@ -2,12 +2,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use futures_util::StreamExt;
-use serde::{Deserialize, Serialize};
+use serde::{ser::SerializeStruct, Deserialize, Serialize};
 use tauri::{ipc::Channel, State};
 use tokio_util::sync::CancellationToken;
 
 /// Default configuration constants as the application currently lacks a Settings UI.
-pub const DEFAULT_OLLAMA_URL: &str = "http://localhost:20128/v1";
+pub const DEFAULT_API_ENDPOINT: &str = "https://openrouter.ai/api/v1";
 pub const DEFAULT_MODEL_NAME: &str = "qw/qwen3-coder-plus";
 pub const DEFAULT_API_KEY: &str = "sk-3d2017a487150c52-29a4c5-8ed3c1b5";
 const API_ENDPOINT_ENV_VAR: &str = "THUKI_API_ENDPOINT";
@@ -42,7 +42,7 @@ pub fn classify_http_error(status: u16, model_name: &str) -> OllamaError {
         404 => OllamaError {
             kind: OllamaErrorKind::ModelNotFound,
             message: format!(
-                "Model not found\nRun: ollama pull {} in a terminal.",
+                "Model not found\nThe selected model \"{}\" is unavailable.",
                 model_name
             ),
         },
@@ -58,12 +58,13 @@ pub fn classify_stream_error(e: &reqwest::Error) -> OllamaError {
     if e.is_connect() || e.is_timeout() {
         OllamaError {
             kind: OllamaErrorKind::NotRunning,
-            message: "Ollama isn't running\nStart Ollama and try again.".to_string(),
+            message: "AI service isn't reachable\nCheck your API endpoint and try again."
+                .to_string(),
         }
     } else {
         OllamaError {
             kind: OllamaErrorKind::Other,
-            message: "Something went wrong\nCould not reach Ollama.".to_string(),
+            message: "Something went wrong\nCould not reach the AI service.".to_string(),
         }
     }
 }
@@ -88,11 +89,61 @@ pub enum StreamChunk {
 ///
 /// The optional `images` field carries base64-encoded image data for
 /// multimodal models. When absent or empty, the message is text-only.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct ChatMessage {
     pub role: String,
     pub content: String,
     pub images: Option<Vec<String>>,
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum SerializedMessageContent<'a> {
+    Text(&'a str),
+    Parts(Vec<SerializedContentPart<'a>>),
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type")]
+enum SerializedContentPart<'a> {
+    #[serde(rename = "text")]
+    Text { text: &'a str },
+    #[serde(rename = "image_url")]
+    ImageUrl { image_url: SerializedImageUrl<'a> },
+}
+
+#[derive(Serialize)]
+struct SerializedImageUrl<'a> {
+    url: &'a str,
+}
+
+impl Serialize for ChatMessage {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let content = if let Some(images) = self.images.as_ref().filter(|imgs| !imgs.is_empty()) {
+            let mut parts = Vec::with_capacity(images.len() + 1);
+            if !self.content.trim().is_empty() {
+                parts.push(SerializedContentPart::Text {
+                    text: &self.content,
+                });
+            }
+            for url in images {
+                parts.push(SerializedContentPart::ImageUrl {
+                    image_url: SerializedImageUrl { url },
+                });
+            }
+            SerializedMessageContent::Parts(parts)
+        } else {
+            SerializedMessageContent::Text(&self.content)
+        };
+
+        let mut state = serializer.serialize_struct("ChatMessage", 2)?;
+        state.serialize_field("role", &self.role)?;
+        state.serialize_field("content", &content)?;
+        state.end()
+    }
 }
 
 /// Request payload for OpenAI `/chat/completions` endpoint.
@@ -105,8 +156,6 @@ struct OpenAIChatRequest {
     top_p: f32,
     frequency_penalty: f32,
     presence_penalty: f32,
-    #[serde(rename = "options", skip_serializing_if = "Option::is_none")]
-    options: Option<OllamaOptions>,
     #[serde(skip_serializing_if = "Option::is_none")]
     think: Option<bool>,
 }
@@ -115,26 +164,10 @@ struct OpenAIChatRequest {
 #[derive(Deserialize)]
 pub struct OpenAIChatDelta {
     content: Option<String>,
+    reasoning_content: Option<String>,
 }
 
-/// Ollama's response format in `/api/chat` stream chunks.
-#[derive(Deserialize)]
-pub struct OllamaChatResponse {
-    message: Option<OllamaMessage>,
-    done: Option<bool>,
-}
-
-#[derive(Deserialize)]
-pub struct OllamaMessage {
-    #[allow(dead_code)]
-    role: String,
-    #[serde(default)]
-    content: String,
-    #[serde(default)]
-    thinking: String,
-}
-
-/// Expected structured response chunk from OpenAI `/chat/completions`.
+/// Expected structured response chunk from OpenAI-compatible `/chat/completions`.
 #[derive(Deserialize)]
 pub struct OpenAIChatResponse {
     choices: Vec<OpenAIChoice>,
@@ -151,11 +184,30 @@ pub struct OpenAIChoice {
 #[derive(Deserialize)]
 pub struct OpenAIUsage;
 
-#[derive(Serialize)]
-struct OllamaOptions {
-    temperature: f32,
-    top_p: f32,
-    top_k: u32,
+fn emit_openai_response_chunk(
+    openai_json: OpenAIChatResponse,
+    accumulated: &mut String,
+    on_chunk: &impl Fn(StreamChunk),
+) {
+    for choice in openai_json.choices {
+        if let Some(delta) = choice.delta {
+            if let Some(reasoning) = delta.reasoning_content {
+                if !reasoning.is_empty() {
+                    on_chunk(StreamChunk::ThinkingToken(reasoning));
+                }
+            }
+            if let Some(token) = delta.content {
+                if !token.is_empty() {
+                    accumulated.push_str(&token);
+                    on_chunk(StreamChunk::Token(token));
+                }
+            }
+        }
+
+        if choice.finish_reason.is_some() && choice.finish_reason.as_deref() != Some("null") {
+            on_chunk(StreamChunk::Done);
+        }
+    }
 }
 
 /// Holds the active cancellation token for the current generation request.
@@ -237,7 +289,7 @@ pub fn load_api_endpoint() -> String {
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| DEFAULT_OLLAMA_URL.to_string())
+        .unwrap_or_else(|| DEFAULT_API_ENDPOINT.to_string())
 }
 
 /// Reads `THUKI_API_KEY` from the environment, falling back to the
@@ -252,11 +304,11 @@ pub fn load_api_key() -> String {
 
 /// Resolves the effective endpoint for the current runtime configuration.
 ///
-/// When callers still pass a URL derived from `DEFAULT_OLLAMA_URL`, this
+/// When callers still pass a URL derived from `DEFAULT_API_ENDPOINT`, this
 /// rewrites only the base portion so tests and custom mock endpoints keep
 /// working unchanged.
 fn resolve_runtime_endpoint(endpoint: &str) -> String {
-    let default_base = DEFAULT_OLLAMA_URL.trim_end_matches('/');
+    let default_base = DEFAULT_API_ENDPOINT.trim_end_matches('/');
     if let Some(suffix) = endpoint.strip_prefix(default_base) {
         format!("{}{}", load_api_endpoint().trim_end_matches('/'), suffix)
     } else {
@@ -490,13 +542,6 @@ pub async fn stream_openai_chat(
     cancel_token: CancellationToken,
     on_chunk: impl Fn(StreamChunk),
 ) -> String {
-    // Create options for Ollama (always send for proper API compatibility)
-    let options = Some(OllamaOptions {
-        temperature: 1.0,
-        top_p: 0.95,
-        top_k: 64,
-    });
-
     let request_payload = OpenAIChatRequest {
         model: model.to_string(),
         messages,
@@ -505,7 +550,6 @@ pub async fn stream_openai_chat(
         top_p: 0.95,
         frequency_penalty: 0.0,
         presence_penalty: 0.0,
-        options,
         think: if think { Some(true) } else { None },
     };
 
@@ -561,83 +605,25 @@ pub async fn stream_openai_chat(
                                             continue;
                                         }
 
-                                        // Handle regular data line - try OpenAI format first
+                                        // Handle OpenAI-compatible SSE payloads.
                                         if let Some(json_str) = trimmed.strip_prefix("data: ") {
-                                            // Try parsing as OpenAI format first
-                                            if let Ok(openai_json) = serde_json::from_str::<OpenAIChatResponse>(json_str) {
-                                                for choice in &openai_json.choices {
-                                                    if let Some(ref delta) = choice.delta {
-                                                        if let Some(ref token) = delta.content {
-                                                            if !token.is_empty() {
-                                                                accumulated.push_str(token);
-                                                                on_chunk(StreamChunk::Token(
-                                                                    token.clone(),
-                                                                ));
-                                                            }
-                                                        }
-                                                    }
-
-                                                    // Check if generation is complete
-                                                    if choice.finish_reason.is_some() && choice.finish_reason.as_deref() != Some("null") {
-                                                        on_chunk(StreamChunk::Done);
-                                                    }
-                                                }
-                                            } else if let Ok(ollama_json) = serde_json::from_str::<OllamaChatResponse>(json_str) {
-                                                // Handle Ollama format
-                                                if let Some(message) = &ollama_json.message {
-                                                    // Emit thinking token if present
-                                                    if !message.thinking.is_empty() {
-                                                        on_chunk(StreamChunk::ThinkingToken(message.thinking.clone()));
-                                                    }
-                                                    // Emit content token if present
-                                                    if !message.content.is_empty() {
-                                                        accumulated.push_str(&message.content);
-                                                        on_chunk(StreamChunk::Token(message.content.clone()));
-                                                    }
-                                                }
-                                                // Check if done
-                                                if ollama_json.done == Some(true) {
-                                                    on_chunk(StreamChunk::Done);
-                                                }
+                                            if let Ok(openai_json) =
+                                                serde_json::from_str::<OpenAIChatResponse>(json_str)
+                                            {
+                                                emit_openai_response_chunk(
+                                                    openai_json,
+                                                    &mut accumulated,
+                                                    &on_chunk,
+                                                );
                                             }
-                                        } else {
-                                            // Try parsing without "data: " prefix (pure JSON line)
-                                            if let Ok(ollama_json) = serde_json::from_str::<OllamaChatResponse>(trimmed) {
-                                                // Handle Ollama format
-                                                if let Some(message) = &ollama_json.message {
-                                                    // Emit thinking token if present
-                                                    if !message.thinking.is_empty() {
-                                                        on_chunk(StreamChunk::ThinkingToken(message.thinking.clone()));
-                                                    }
-                                                    // Emit content token if present
-                                                    if !message.content.is_empty() {
-                                                        accumulated.push_str(&message.content);
-                                                        on_chunk(StreamChunk::Token(message.content.clone()));
-                                                    }
-                                                }
-                                                // Check if done
-                                                if ollama_json.done == Some(true) {
-                                                    on_chunk(StreamChunk::Done);
-                                                }
-                                            } else if let Ok(openai_json) = serde_json::from_str::<OpenAIChatResponse>(trimmed) {
-                                                for choice in &openai_json.choices {
-                                                    if let Some(ref delta) = choice.delta {
-                                                        if let Some(ref token) = delta.content {
-                                                            if !token.is_empty() {
-                                                                accumulated.push_str(token);
-                                                                on_chunk(StreamChunk::Token(
-                                                                    token.clone(),
-                                                                ));
-                                                            }
-                                                        }
-                                                    }
-
-                                                    // Check if generation is complete
-                                                    if choice.finish_reason.is_some() && choice.finish_reason.as_deref() != Some("null") {
-                                                        on_chunk(StreamChunk::Done);
-                                                    }
-                                                }
-                                            }
+                                        } else if let Ok(openai_json) =
+                                            serde_json::from_str::<OpenAIChatResponse>(trimmed)
+                                        {
+                                            emit_openai_response_chunk(
+                                                openai_json,
+                                                &mut accumulated,
+                                                &on_chunk,
+                                            );
                                         }
                                     }
                                 }
@@ -660,14 +646,14 @@ pub async fn stream_openai_chat(
     accumulated
 }
 
-/// Streams a chat response from the local Ollama backend. Appends the user
+/// Streams a chat response from the configured AI API. Appends the user
 /// message and assistant response to conversation history after completion
 /// or cancellation (retaining context for follow-up requests). Uses an epoch
 /// counter to prevent stale writes after a reset.
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg_attr(not(coverage), tauri::command)]
 #[allow(clippy::too_many_arguments)]
-pub async fn ask_ollama(
+pub async fn ask_ai(
     message: String,
     quoted_text: Option<String>,
     image_paths: Option<Vec<String>>,
@@ -696,11 +682,14 @@ pub async fn ask_ollama(
         _ => message,
     };
 
-    // Base64-encode attached images for the Ollama multimodal API.
+    // Convert attached images to data URLs for OpenAI-compatible multimodal APIs.
     let images = match image_paths {
-        Some(ref paths) if !paths.is_empty() => {
-            Some(crate::images::encode_images_as_base64(paths)?)
-        }
+        Some(ref paths) if !paths.is_empty() => Some(
+            crate::images::encode_images_as_base64(paths)?
+                .into_iter()
+                .map(|base64| format!("data:image/jpeg;base64,{base64}"))
+                .collect(),
+        ),
         _ => None,
     };
 
@@ -710,7 +699,7 @@ pub async fn ask_ollama(
         images,
     };
 
-    // Snapshot the current epoch and build the messages array for Ollama.
+    // Snapshot the current epoch and build the outbound API message array.
     // The user message is NOT yet committed to history — it is only added
     // after a response (including partial/cancelled) to prevent orphaned
     // messages on errors.
@@ -748,10 +737,9 @@ pub async fn ask_ollama(
     let current_epoch = history.epoch.load(Ordering::SeqCst);
     if current_epoch == epoch_at_start && !accumulated.is_empty() {
         let mut conv = history.messages.lock().unwrap();
-        // Preserve images in history so that follow-up messages can still
-        // reference earlier screenshots or attachments.  The full conversation
-        // (including base64 blobs) is replayed to Ollama on every turn, which
-        // is fine for a localhost-only setup.
+        // Preserve image data URLs in history so that follow-up messages can still
+        // reference earlier screenshots or attachments when the full conversation
+        // is replayed to the configured AI API on later turns.
         conv.push(user_msg);
         conv.push(ChatMessage {
             role: "assistant".to_string(),
@@ -1588,7 +1576,7 @@ mod tests {
         std::env::remove_var(API_ENDPOINT_ENV_VAR);
 
         let endpoint = load_api_endpoint();
-        assert_eq!(endpoint, DEFAULT_OLLAMA_URL);
+        assert_eq!(endpoint, DEFAULT_API_ENDPOINT);
     }
 
     #[test]
@@ -1627,8 +1615,7 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap();
         std::env::set_var(API_ENDPOINT_ENV_VAR, "http://localhost:11434/v1");
 
-        let endpoint =
-            resolve_runtime_endpoint("http://localhost:20128/v1/chat/completions");
+        let endpoint = resolve_runtime_endpoint("https://openrouter.ai/api/v1/chat/completions");
         assert_eq!(endpoint, "http://localhost:11434/v1/chat/completions");
 
         std::env::remove_var(API_ENDPOINT_ENV_VAR);
@@ -1755,7 +1742,6 @@ mod tests {
             top_p: 0.9,
             frequency_penalty: 0.0,
             presence_penalty: 0.0,
-            options: None,
             think: None,
         };
         let json = serde_json::to_value(req).unwrap();
@@ -1771,11 +1757,25 @@ mod tests {
         let msg = ChatMessage {
             role: "user".to_string(),
             content: "Hello".to_string(),
-            images: Some(vec!["image1".to_string(), "image2".to_string()]),
+            images: Some(vec![
+                "data:image/jpeg;base64,image1".to_string(),
+                "data:image/jpeg;base64,image2".to_string(),
+            ]),
         };
         let json = serde_json::to_value(&msg).unwrap();
         assert_eq!(json["role"], "user");
-        assert_eq!(json["content"], "Hello");
+        assert_eq!(json["content"][0]["type"], "text");
+        assert_eq!(json["content"][0]["text"], "Hello");
+        assert_eq!(json["content"][1]["type"], "image_url");
+        assert_eq!(
+            json["content"][1]["image_url"]["url"],
+            "data:image/jpeg;base64,image1"
+        );
+        assert_eq!(json["content"][2]["type"], "image_url");
+        assert_eq!(
+            json["content"][2]["image_url"]["url"],
+            "data:image/jpeg;base64,image2"
+        );
     }
 
     #[test]

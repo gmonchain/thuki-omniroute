@@ -2,7 +2,7 @@ import { useState, useCallback } from 'react';
 import { invoke, Channel } from '@tauri-apps/api/core';
 
 /** Mirrors the Rust AIErrorKind enum sent over IPC. */
-export type OllamaErrorKind = 'NotRunning' | 'ModelNotFound' | 'Other';
+export type AiErrorKind = 'NotRunning' | 'ModelNotFound' | 'Other';
 
 /**
  * Represents a single message in the chat thread.
@@ -16,8 +16,8 @@ export interface Message {
   quotedText?: string;
   /** Absolute file paths of images attached to this message, if any. */
   imagePaths?: string[];
-  /** Present on assistant messages that represent an Ollama error callout. */
-  errorKind?: OllamaErrorKind;
+  /** Present on assistant messages that represent an AI service error callout. */
+  errorKind?: AiErrorKind;
   /** Accumulated thinking/reasoning content from the model, if thinking mode was used. */
   thinkingContent?: string;
 }
@@ -30,10 +30,10 @@ export type StreamChunk =
   | { type: 'ThinkingToken'; data: string }
   | { type: 'Done' }
   | { type: 'Cancelled' }
-  | { type: 'Error'; data: { kind: OllamaErrorKind; message: string } };
+  | { type: 'Error'; data: { kind: AiErrorKind; message: string } };
 
 /**
- * A custom hook that simplifies interactions with the local AI LLM.
+ * A custom hook that simplifies interactions with the configured AI chat API.
  * It manages message history, streaming state, and sets up Rust IPC channels.
  *
  * @param onTurnComplete Optional callback invoked after a complete user/assistant
@@ -42,7 +42,7 @@ export type StreamChunk =
  *   Used by the caller to persist completed turns to SQLite.
  * @returns An object containing the message history, a submit callback function, and operational states.
  */
-export function useOllama(
+export function useAiChat(
   onTurnComplete?: (userMsg: Message, assistantMsg: Message) => void,
 ) {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -58,7 +58,7 @@ export function useOllama(
    * @param displayContent The user's query as it should appear in the chat bubble.
    * @param quotedText Optional selected text quoted alongside this message.
    * @param imagePaths Optional array of absolute file paths for attached images.
-   * @param think When true, enables the AI's thinking/reasoning mode.
+   * @param think When true, enables the AI's reasoning mode.
    * @param promptOverride When provided, sent to the backend as the actual message
    *   instead of displayContent. The chat bubble still shows displayContent.
    *   Used by utility slash commands to send a composed prompt template while
@@ -151,7 +151,7 @@ export function useOllama(
       };
 
       try {
-        await invoke('ask_ollama', {
+        await invoke('ask_ai', {
           message: promptOverride ?? displayContent,
           quotedText: quotedText ?? null,
           imagePaths: imagePaths && imagePaths.length > 0 ? imagePaths : null,

@@ -244,7 +244,7 @@ pub async fn generate_title(
 
     let endpoint = format!(
         "{}/chat/completions",
-        crate::commands::DEFAULT_OLLAMA_URL.trim_end_matches('/')
+        crate::commands::load_api_endpoint().trim_end_matches('/')
     );
 
     let cancel_token = tokio_util::sync::CancellationToken::new();

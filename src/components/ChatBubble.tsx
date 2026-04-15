@@ -8,7 +8,7 @@ import { convertFileSrc } from '@tauri-apps/api/core';
 import { formatQuotedText } from '../utils/formatQuote';
 import { quote } from '../config';
 import { COMMANDS, SCREEN_CAPTURE_PLACEHOLDER } from '../config/commands';
-import type { OllamaErrorKind } from '../hooks/useOllama';
+import type { AiErrorKind } from '../hooks/useAiChat';
 
 /**
  * Renders user message content with slash commands styled distinctly.
@@ -75,7 +75,7 @@ interface ChatBubbleProps {
   /** Whether this bubble is actively streaming content from the LLM. */
   isStreaming?: boolean;
   /** When set, renders an ErrorCard callout instead of markdown. */
-  errorKind?: OllamaErrorKind;
+  errorKind?: AiErrorKind;
   /** Accumulated thinking/reasoning content from the model, if thinking mode was used. */
   thinkingContent?: string;
   /** Whether the model is currently in the thinking phase (streaming thinking tokens). */

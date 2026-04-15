@@ -11,8 +11,8 @@ import { listen } from '@tauri-apps/api/event';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { LogicalSize } from '@tauri-apps/api/dpi';
-import { useOllama } from './hooks/useOllama';
-import type { Message } from './hooks/useOllama';
+import { useAiChat } from './hooks/useAiChat';
+import type { Message } from './hooks/useAiChat';
 import { useConversationHistory } from './hooks/useConversationHistory';
 import { ConversationView } from './view/ConversationView';
 import { AskBarView, MAX_IMAGES } from './view/AskBarView';
@@ -140,7 +140,7 @@ function App() {
 
   /**
    * Persist a completed user/assistant turn to SQLite if the conversation
-   * has been saved. Passed as `onTurnComplete` to `useOllama`.
+   * has been saved. Passed as `onTurnComplete` to the generic AI chat hook.
    */
   const handleTurnComplete = useCallback(
     async (
@@ -153,7 +153,7 @@ function App() {
   );
 
   const { messages, ask, cancel, isGenerating, reset, loadMessages } =
-    useOllama(handleTurnComplete);
+    useAiChat(handleTurnComplete);
 
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -1251,7 +1251,7 @@ function App() {
 
   /**
    * Unified cancel handler: reverts a pending submit (undo-send), clears an
-   * in-flight /screen capture, or cancels an active Ollama generation.
+   * in-flight /screen capture, or cancels an active AI generation.
    *
    * Three cases:
    * 1. Image-processing pending (`pendingSubmitRef.current` is set): restore
@@ -1261,7 +1261,7 @@ function App() {
    *    side, but `isSubmitPending` being false when the result arrives will
    *    cause `handleScreenSubmit` to attempt ask() on stale state. To prevent
    *    that, we track the abandonment via a flag so the async tail is a no-op.
-   * 3. Ollama generation active: delegate to the streaming cancel.
+   * 3. AI generation active: delegate to the streaming cancel.
    */
   const handleCancel = useCallback(() => {
     if (isSubmitPending && pendingSubmitRef.current) {

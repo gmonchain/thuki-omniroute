@@ -748,7 +748,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             #[cfg(not(coverage))]
-            commands::ask_ollama,
+            commands::ask_ai,
             #[cfg(not(coverage))]
             commands::cancel_generation,
             #[cfg(not(coverage))]

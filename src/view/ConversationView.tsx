@@ -3,7 +3,7 @@ import { useRef, useEffect } from 'react';
 import { ChatBubble } from '../components/ChatBubble';
 import { TypingIndicator } from '../components/TypingIndicator';
 import { WindowControls } from '../components/WindowControls';
-import type { Message } from '../hooks/useOllama';
+import type { Message } from '../hooks/useAiChat';
 
 /**
  * Props for the ConversationView component.
