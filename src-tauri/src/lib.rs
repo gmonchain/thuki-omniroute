@@ -416,15 +416,18 @@ fn notify_frontend_ready(app_handle: tauri::AppHandle, db: tauri::State<history:
                     return;
                 }
 
-                // All permissions granted. If not yet complete, show api setup, then intro.
+                // All permissions granted. If not yet complete, progress through onboarding stages.
                 if !matches!(stage, onboarding::OnboardingStage::Complete) {
-                    // Check if we should go to API setup or directly to intro
-                    if matches!(stage, onboarding::OnboardingStage::ApiSetup) {
-                        show_onboarding_window(&app_handle, onboarding::OnboardingStage::ApiSetup);
-                        return;
-                    } else {
+                    // If the current stage is "Permissions" (default on first launch),
+                    // and permissions are granted, move to API setup stage
+                    if matches!(stage, onboarding::OnboardingStage::Permissions) {
                         let _ =
                             onboarding::set_stage(&conn, &onboarding::OnboardingStage::ApiSetup);
+                        show_onboarding_window(&app_handle, onboarding::OnboardingStage::ApiSetup);
+                        return;
+                    }
+                    // If stage is already API setup, show the API setup window
+                    else if matches!(stage, onboarding::OnboardingStage::ApiSetup) {
                         show_onboarding_window(&app_handle, onboarding::OnboardingStage::ApiSetup);
                         return;
                     }
