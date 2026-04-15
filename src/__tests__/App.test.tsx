@@ -35,6 +35,35 @@ describe('App', () => {
     expect(invoke).toHaveBeenCalledWith('get_model_config');
   });
 
+  it('updates the active model when selecting a different option', async () => {
+    enableChannelCaptureWithResponses({
+      get_model_config: {
+        active: 'qw/qwen3-coder-plus',
+        all: ['qw/qwen3-coder-plus', 'cx/gpt-5.2'],
+      },
+      set_active_model: {
+        active: 'cx/gpt-5.2',
+        all: ['qw/qwen3-coder-plus', 'cx/gpt-5.2'],
+      },
+    });
+
+    render(<App />);
+    await act(async () => {});
+    await showOverlay();
+
+    const select = screen.getByLabelText('Select model');
+    act(() => {
+      fireEvent.change(select, { target: { value: 'cx/gpt-5.2' } });
+    });
+
+    await vi.waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('set_active_model', {
+        model: 'cx/gpt-5.2',
+      });
+      expect((select as HTMLSelectElement).value).toBe('cx/gpt-5.2');
+    });
+  });
+
   it('grows upward when near bottom screen edge', async () => {
     const { container } = render(<App />);
     await act(async () => {});
@@ -3698,6 +3727,276 @@ describe('App', () => {
         expect(args.message).toContain('some long text');
         expect(args.think).toBe(true);
       });
+    });
+
+    it('routes /add-model command to the backend and updates the model list', async () => {
+      enableChannelCaptureWithResponses({
+        get_model_config: {
+          active: 'qw/qwen3-coder-plus',
+          all: ['qw/qwen3-coder-plus', 'cx/gpt-5.2'],
+        },
+        add_model: {
+          active: 'qw/qwen3-coder-plus',
+          all: ['qw/qwen3-coder-plus', 'cx/gpt-5.2', 'chagpt-5.4'],
+        },
+      });
+
+      render(<App />);
+      await act(async () => {});
+      await showOverlay();
+
+      const textarea = screen.getByPlaceholderText('Ask Thuki anything...');
+      act(() => {
+        fireEvent.change(textarea, {
+          target: { value: '/add-model chagpt-5.4' },
+        });
+      });
+
+      await act(async () => {
+        fireEvent.keyDown(textarea, { key: 'Enter', shiftKey: false });
+      });
+
+      await vi.waitFor(() => {
+        expect(invoke).toHaveBeenCalledWith('add_model', {
+          model: 'chagpt-5.4',
+        });
+        expect(
+          screen.getByRole('option', { name: 'chagpt-5.4' }),
+        ).toBeInTheDocument();
+      });
+
+      expect(invoke).not.toHaveBeenCalledWith('ask_ollama', expect.anything());
+    });
+
+    it('routes /del-model command to the backend and removes the model from the list', async () => {
+      enableChannelCaptureWithResponses({
+        get_model_config: {
+          active: 'qw/qwen3-coder-plus',
+          all: ['qw/qwen3-coder-plus', 'chagpt-5.4'],
+        },
+        remove_model: {
+          active: 'qw/qwen3-coder-plus',
+          all: ['qw/qwen3-coder-plus'],
+        },
+      });
+
+      render(<App />);
+      await act(async () => {});
+      await showOverlay();
+
+      const textarea = screen.getByPlaceholderText('Ask Thuki anything...');
+      act(() => {
+        fireEvent.change(textarea, {
+          target: { value: '/del-model chagpt-5.4' },
+        });
+      });
+
+      await act(async () => {
+        fireEvent.keyDown(textarea, { key: 'Enter', shiftKey: false });
+      });
+
+      await vi.waitFor(() => {
+        expect(invoke).toHaveBeenCalledWith('remove_model', {
+          model: 'chagpt-5.4',
+        });
+        expect(screen.queryByRole('option', { name: 'chagpt-5.4' })).toBeNull();
+      });
+
+      expect(invoke).not.toHaveBeenCalledWith('ask_ollama', expect.anything());
+    });
+
+    it('routes /model command to the backend and updates the active model', async () => {
+      enableChannelCaptureWithResponses({
+        get_model_config: {
+          active: 'qw/qwen3-coder-plus',
+          all: ['qw/qwen3-coder-plus', 'cx/gpt-5.2'],
+        },
+        set_active_model: {
+          active: 'cx/gpt-5.2',
+          all: ['qw/qwen3-coder-plus', 'cx/gpt-5.2'],
+        },
+      });
+
+      render(<App />);
+      await act(async () => {});
+      await showOverlay();
+
+      const textarea = screen.getByPlaceholderText('Ask Thuki anything...');
+      act(() => {
+        fireEvent.change(textarea, {
+          target: { value: '/model cx/gpt-5.2' },
+        });
+      });
+
+      await act(async () => {
+        fireEvent.keyDown(textarea, { key: 'Enter', shiftKey: false });
+      });
+
+      await vi.waitFor(() => {
+        expect(invoke).toHaveBeenCalledWith('set_active_model', {
+          model: 'cx/gpt-5.2',
+        });
+        expect(
+          (screen.getByLabelText('Select model') as HTMLSelectElement).value,
+        ).toBe('cx/gpt-5.2');
+      });
+
+      expect(invoke).not.toHaveBeenCalledWith('ask_ollama', expect.anything());
+    });
+
+    it('routes /endpoint command to the backend and clears the input', async () => {
+      enableChannelCaptureWithResponses({
+        set_api_endpoint: {
+          endpoint: 'http://localhost:11434/v1',
+          has_api_key: true,
+        },
+      });
+
+      render(<App />);
+      await act(async () => {});
+      await showOverlay();
+
+      const textarea = screen.getByPlaceholderText('Ask Thuki anything...');
+      act(() => {
+        fireEvent.change(textarea, {
+          target: { value: '/endpoint http://localhost:11434/v1' },
+        });
+      });
+
+      await act(async () => {
+        fireEvent.keyDown(textarea, { key: 'Enter', shiftKey: false });
+      });
+
+      await vi.waitFor(() => {
+        expect(invoke).toHaveBeenCalledWith('set_api_endpoint', {
+          endpoint: 'http://localhost:11434/v1',
+        });
+        expect(
+          screen.getByPlaceholderText('Ask Thuki anything...'),
+        ).toHaveValue('');
+      });
+
+      expect(invoke).not.toHaveBeenCalledWith('ask_ollama', expect.anything());
+    });
+
+    it('routes /api-key command to the backend and clears the input', async () => {
+      enableChannelCaptureWithResponses({
+        set_api_key: {
+          endpoint: 'http://localhost:20128/v1',
+          has_api_key: true,
+        },
+      });
+
+      render(<App />);
+      await act(async () => {});
+      await showOverlay();
+
+      const textarea = screen.getByPlaceholderText('Ask Thuki anything...');
+      act(() => {
+        fireEvent.change(textarea, {
+          target: { value: '/api-key sk-test-123' },
+        });
+      });
+
+      await act(async () => {
+        fireEvent.keyDown(textarea, { key: 'Enter', shiftKey: false });
+      });
+
+      await vi.waitFor(() => {
+        expect(invoke).toHaveBeenCalledWith('set_api_key', {
+          apiKey: 'sk-test-123',
+        });
+        expect(
+          screen.getByPlaceholderText('Ask Thuki anything...'),
+        ).toHaveValue('');
+      });
+
+      expect(invoke).not.toHaveBeenCalledWith('ask_ollama', expect.anything());
+    });
+
+    it('deletes a model from the /model suggestion popover', async () => {
+      enableChannelCaptureWithResponses({
+        get_model_config: {
+          active: 'qw/qwen3-coder-plus',
+          all: ['qw/qwen3-coder-plus', 'chagpt-5.4'],
+        },
+        remove_model: {
+          active: 'qw/qwen3-coder-plus',
+          all: ['qw/qwen3-coder-plus'],
+        },
+      });
+
+      render(<App />);
+      await act(async () => {});
+      await showOverlay();
+
+      const textarea = screen.getByPlaceholderText('Ask Thuki anything...');
+      act(() => {
+        fireEvent.change(textarea, {
+          target: { value: '/model' },
+        });
+      });
+
+      expect(
+        screen.getByRole('listbox', { name: 'Model suggestions' }),
+      ).toBeInTheDocument();
+
+      await act(async () => {
+        fireEvent.mouseDown(
+          screen.getByRole('button', { name: 'Delete chagpt-5.4' }),
+        );
+      });
+
+      await vi.waitFor(() => {
+        expect(invoke).toHaveBeenCalledWith('remove_model', {
+          model: 'chagpt-5.4',
+        });
+        expect(
+          screen.queryByRole('button', { name: 'Delete chagpt-5.4' }),
+        ).toBeNull();
+      });
+
+      expect(invoke).not.toHaveBeenCalledWith('ask_ollama', expect.anything());
+    });
+
+    it('toggles the history panel when /history is submitted', async () => {
+      invoke.mockResolvedValue([]); // list_conversations returns empty
+
+      render(<App />);
+      await act(async () => {});
+      await showOverlay();
+
+      const textarea = screen.getByPlaceholderText('Ask Thuki anything...');
+
+      act(() => {
+        fireEvent.change(textarea, {
+          target: { value: '/history' },
+        });
+      });
+
+      await act(async () => {
+        fireEvent.keyDown(textarea, { key: 'Enter', shiftKey: false });
+      });
+
+      await vi.waitFor(() => {
+        expect(screen.getByText('No conversations yet.')).toBeInTheDocument();
+      });
+
+      act(() => {
+        fireEvent.change(textarea, {
+          target: { value: '/history' },
+        });
+      });
+
+      await act(async () => {
+        fireEvent.keyDown(textarea, { key: 'Enter', shiftKey: false });
+      });
+
+      await vi.waitFor(() => {
+        expect(screen.queryByText('No conversations yet.')).toBeNull();
+      });
+
+      expect(invoke).not.toHaveBeenCalledWith('ask_ollama', expect.anything());
     });
 
     it('utility command with no input text does not call ask_ollama', async () => {

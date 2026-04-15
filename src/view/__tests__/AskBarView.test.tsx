@@ -194,7 +194,7 @@ describe('AskBarView', () => {
     expect(logo?.classList.contains('rounded-lg')).toBe(true);
   });
 
-  it('shows send button with accessible label', () => {
+  it('shows send button with accessible label and circular styling', () => {
     render(
       <AskBarView
         {...IMAGE_DEFAULTS}
@@ -207,9 +207,9 @@ describe('AskBarView', () => {
         inputRef={makeRef()}
       />,
     );
-    expect(
-      screen.getByRole('button', { name: 'Send message' }),
-    ).toBeInTheDocument();
+    const sendButton = screen.getByRole('button', { name: 'Send message' });
+    expect(sendButton).toBeInTheDocument();
+    expect(sendButton.classList.contains('rounded-full')).toBe(true);
   });
 
   it('displays selectedText when provided', () => {
@@ -1442,6 +1442,72 @@ describe('AskBarView', () => {
       );
       const textarea = screen.getByPlaceholderText('Ask Thuki anything...');
       fireEvent.keyDown(textarea, { key: 'Tab' });
+      expect(setQuery).not.toHaveBeenCalled();
+    });
+
+    it('shows model suggestions when query is "/model" and selecting one clears query', () => {
+      const setQuery = vi.fn();
+      const onModelChange = vi.fn();
+
+      render(
+        <AskBarView
+          {...IMAGE_DEFAULTS}
+          query="/model"
+          setQuery={setQuery}
+          isChatMode={false}
+          isGenerating={false}
+          onSubmit={vi.fn()}
+          onCancel={vi.fn()}
+          inputRef={makeRef()}
+          modelOptions={['qw/qwen3-coder-plus', 'cx/gpt-5.2']}
+          onModelChange={onModelChange}
+        />,
+      );
+
+      expect(
+        screen.getByRole('listbox', { name: /model suggestions/i }),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole('button', { name: 'Delete qw/qwen3-coder-plus' }),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole('button', { name: 'Delete cx/gpt-5.2' }),
+      ).toBeInTheDocument();
+
+      const options = screen.getAllByRole('option');
+      fireEvent.mouseDown(options[1]);
+
+      expect(onModelChange).toHaveBeenCalledWith('cx/gpt-5.2');
+      expect(setQuery).toHaveBeenCalledWith('');
+    });
+
+    it('clicking delete on a /model suggestion calls onModelDelete without selecting the model', () => {
+      const setQuery = vi.fn();
+      const onModelChange = vi.fn();
+      const onModelDelete = vi.fn();
+
+      render(
+        <AskBarView
+          {...IMAGE_DEFAULTS}
+          query="/model"
+          setQuery={setQuery}
+          isChatMode={false}
+          isGenerating={false}
+          onSubmit={vi.fn()}
+          onCancel={vi.fn()}
+          inputRef={makeRef()}
+          modelOptions={['qw/qwen3-coder-plus', 'cx/gpt-5.2']}
+          onModelChange={onModelChange}
+          onModelDelete={onModelDelete}
+        />,
+      );
+
+      fireEvent.mouseDown(
+        screen.getByRole('button', { name: 'Delete cx/gpt-5.2' }),
+      );
+
+      expect(onModelDelete).toHaveBeenCalledWith('cx/gpt-5.2');
+      expect(onModelChange).not.toHaveBeenCalled();
       expect(setQuery).not.toHaveBeenCalled();
     });
   });

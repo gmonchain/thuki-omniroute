@@ -46,6 +46,48 @@ describe('COMMANDS registry', () => {
     expect(think?.description.length).toBeGreaterThan(0);
   });
 
+  it('includes the /add-model command', () => {
+    const cmd = COMMANDS.find((c: Command) => c.trigger === '/add-model');
+    expect(cmd).toBeDefined();
+    expect(cmd?.label).toBe('/add-model');
+    expect(cmd?.description.length).toBeGreaterThan(0);
+  });
+
+  it('includes the /del-model command', () => {
+    const cmd = COMMANDS.find((c: Command) => c.trigger === '/del-model');
+    expect(cmd).toBeDefined();
+    expect(cmd?.label).toBe('/del-model');
+    expect(cmd?.description.length).toBeGreaterThan(0);
+  });
+
+  it('includes the /history command', () => {
+    const cmd = COMMANDS.find((c: Command) => c.trigger === '/history');
+    expect(cmd).toBeDefined();
+    expect(cmd?.label).toBe('/history');
+    expect(cmd?.description.length).toBeGreaterThan(0);
+  });
+
+  it('includes the /model command', () => {
+    const cmd = COMMANDS.find((c: Command) => c.trigger === '/model');
+    expect(cmd).toBeDefined();
+    expect(cmd?.label).toBe('/model');
+    expect(cmd?.description.length).toBeGreaterThan(0);
+  });
+
+  it('includes the /endpoint command', () => {
+    const cmd = COMMANDS.find((c: Command) => c.trigger === '/endpoint');
+    expect(cmd).toBeDefined();
+    expect(cmd?.label).toBe('/endpoint');
+    expect(cmd?.description.length).toBeGreaterThan(0);
+  });
+
+  it('includes the /api-key command', () => {
+    const cmd = COMMANDS.find((c: Command) => c.trigger === '/api-key');
+    expect(cmd).toBeDefined();
+    expect(cmd?.label).toBe('/api-key');
+    expect(cmd?.description.length).toBeGreaterThan(0);
+  });
+
   it('includes the /translate command', () => {
     const cmd = COMMANDS.find((c: Command) => c.trigger === '/translate');
     expect(cmd).toBeDefined();
@@ -101,11 +143,23 @@ describe('COMMANDS registry', () => {
     expect(cmd?.promptTemplate).toContain('$LANG');
   });
 
-  it('/screen and /think have no promptTemplate', () => {
+  it('/screen, /think, /add-model, /del-model, /history, /model, /endpoint, and /api-key have no promptTemplate', () => {
     const screen = COMMANDS.find((c: Command) => c.trigger === '/screen');
     const think = COMMANDS.find((c: Command) => c.trigger === '/think');
+    const addModel = COMMANDS.find((c: Command) => c.trigger === '/add-model');
+    const delModel = COMMANDS.find((c: Command) => c.trigger === '/del-model');
+    const history = COMMANDS.find((c: Command) => c.trigger === '/history');
+    const model = COMMANDS.find((c: Command) => c.trigger === '/model');
+    const endpoint = COMMANDS.find((c: Command) => c.trigger === '/endpoint');
+    const apiKey = COMMANDS.find((c: Command) => c.trigger === '/api-key');
     expect(screen?.promptTemplate).toBeUndefined();
     expect(think?.promptTemplate).toBeUndefined();
+    expect(addModel?.promptTemplate).toBeUndefined();
+    expect(delModel?.promptTemplate).toBeUndefined();
+    expect(history?.promptTemplate).toBeUndefined();
+    expect(model?.promptTemplate).toBeUndefined();
+    expect(endpoint?.promptTemplate).toBeUndefined();
+    expect(apiKey?.promptTemplate).toBeUndefined();
   });
 });
 

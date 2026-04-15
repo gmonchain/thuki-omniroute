@@ -975,6 +975,13 @@ function App() {
     const { found, strippedMessage } = parseCommands(trimmedQuery);
     const hasScreen = found.has('/screen');
     const hasThink = found.has('/think');
+    const hasHistory = found.has('/history');
+    const hasModel = found.has('/model');
+    const hasEndpoint = found.has('/endpoint');
+    const hasApiKey = found.has('/api-key');
+    const modelTrigger = Array.from(found).find(
+      (t) => t === '/add-model' || t === '/del-model',
+    );
 
     // Check for utility commands with prompt templates.
     const utilityTrigger = Array.from(found).find((t) => {
@@ -989,9 +996,84 @@ function App() {
       !strippedMessage &&
       attachedImages.length === 0 &&
       !hasScreen &&
+      !hasHistory &&
+      !hasModel &&
+      !hasEndpoint &&
+      !hasApiKey &&
       !((utilityTrigger || hasThink) && selectedContext?.trim())
     )
       return;
+
+    if (hasHistory) {
+      setIsHistoryOpen((prev) => !prev);
+      setQuery('');
+      return;
+    }
+
+    if (hasModel) {
+      const nextModel = strippedMessage.trim();
+      if (!nextModel) return;
+
+      void invoke<{ active: string; all: string[] }>('set_active_model', {
+        model: nextModel,
+      })
+        .then((nextConfig) => {
+          setModelConfig(nextConfig);
+          setQuery('');
+        })
+        .catch(() => undefined);
+
+      return;
+    }
+
+    if (hasEndpoint) {
+      const nextEndpoint = strippedMessage.trim();
+      if (!nextEndpoint) return;
+
+      void invoke('set_api_endpoint', {
+        endpoint: nextEndpoint,
+      })
+        .then(() => {
+          setQuery('');
+        })
+        .catch(() => undefined);
+
+      return;
+    }
+
+    if (hasApiKey) {
+      const nextApiKey = strippedMessage.trim();
+      if (!nextApiKey) return;
+
+      void invoke('set_api_key', {
+        apiKey: nextApiKey,
+      })
+        .then(() => {
+          setQuery('');
+        })
+        .catch(() => undefined);
+
+      return;
+    }
+
+    if (modelTrigger) {
+      const nextModel = strippedMessage.trim();
+      if (!nextModel) return;
+
+      const command =
+        modelTrigger === '/add-model' ? 'add_model' : 'remove_model';
+
+      void invoke<{ active: string; all: string[] }>(command, {
+        model: nextModel,
+      })
+        .then((nextConfig) => {
+          setModelConfig(nextConfig);
+          setQuery('');
+        })
+        .catch(() => undefined);
+
+      return;
+    }
 
     if (hasScreen) {
       // Fire-and-forget: the async path handles cleanup and ask() invocation.
@@ -1112,6 +1194,7 @@ function App() {
   }, [
     query,
     isGenerating,
+    ask,
     executeSubmit,
     handleScreenSubmit,
     selectedContext,
@@ -1211,6 +1294,22 @@ function App() {
     }
     cancel();
   }, [isSubmitPending, cancel, setSelectedContext]);
+
+  const handleModelChange = useCallback((nextModel: string) => {
+    void invoke<{ active: string; all: string[] }>('set_active_model', {
+      model: nextModel,
+    })
+      .then(setModelConfig)
+      .catch(() => undefined);
+  }, []);
+
+  const handleModelDelete = useCallback((model: string) => {
+    void invoke<{ active: string; all: string[] }>('remove_model', {
+      model,
+    })
+      .then(setModelConfig)
+      .catch(() => undefined);
+  }, []);
 
   /** Fetches model configuration from the backend once at mount. */
   useEffect(() => {
@@ -1377,7 +1476,7 @@ function App() {
       onDragOver={handleRootDragOver}
       onDragLeave={handleRootDragLeave}
       onDrop={handleRootDrop}
-      className={`flex flex-col items-center ${growsUpward ? 'justify-end' : 'justify-start'} h-screen w-screen px-3 pt-2 pb-6 bg-transparent overflow-visible`}
+      className={`flex flex-col items-center ${growsUpward ? 'justify-end' : 'justify-start'} h-screen w-screen px-3 py-4 bg-transparent overflow-visible`}
     >
       <AnimatePresence mode="wait">
         {shouldRenderOverlay ? (
@@ -1501,6 +1600,10 @@ function App() {
                   onImageRemove={handleImageRemove}
                   onImagePreview={handleAskBarImagePreview}
                   onScreenshot={handleScreenshot}
+                  selectedModel={modelConfig?.active}
+                  modelOptions={modelConfig?.all}
+                  onModelChange={handleModelChange}
+                  onModelDelete={handleModelDelete}
                   isDragOver={isDragOver ?? undefined}
                 />
               </div>

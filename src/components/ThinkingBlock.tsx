@@ -10,6 +10,18 @@ export interface ThinkingBlockProps {
 const THINKING_TEXT = 'Thinking...';
 /** Delay between each character's flash start. */
 const CHAR_DELAY_MS = 80;
+const THINKING_CHARACTERS = THINKING_TEXT.split('').reduce<
+  Array<{ char: string; key: string; delayMs: number }>
+>((characters, char) => {
+  const occurrence =
+    characters.filter((entry) => entry.char === char).length + 1;
+  characters.push({
+    char,
+    key: `${char}-${occurrence}`,
+    delayMs: characters.length * CHAR_DELAY_MS,
+  });
+  return characters;
+}, []);
 /** How long a single character's flash lasts (rise + fall). */
 const FLASH_MS = 200;
 /** Pause after the last character finishes before the next sweep. */
@@ -35,12 +47,12 @@ const END_PCT = (FLASH_MS / TOTAL_CYCLE_MS) * 100;
 function ThinkingLabel() {
   return (
     <span className="text-sm text-text-secondary" data-testid="thinking-label">
-      {THINKING_TEXT.split('').map((char, i) => (
+      {THINKING_CHARACTERS.map(({ char, key, delayMs }) => (
         <span
-          key={i}
+          key={key}
           className="inline-block thinking-sweep-char"
           style={{
-            animationDelay: `${i * CHAR_DELAY_MS}ms`,
+            animationDelay: `${delayMs}ms`,
           }}
         >
           {char}

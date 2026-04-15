@@ -232,4 +232,61 @@ describe('CommandSuggestion', () => {
     expect(screen.getByText('/bullets')).toBeInTheDocument();
     expect(screen.getByText('/todos')).toBeInTheDocument();
   });
+
+  it('renders model suggestion mode with model header and rows', () => {
+    render(
+      <CommandSuggestion
+        models={['qw/qwen3-coder-plus', 'cx/gpt-5.2']}
+        highlightedIndex={0}
+        onSelect={vi.fn()}
+      />,
+    );
+    expect(
+      screen.getByRole('listbox', { name: 'Model suggestions' }),
+    ).toBeInTheDocument();
+    expect(screen.getByText('Models')).toBeInTheDocument();
+    expect(screen.getByText('qw/qwen3-coder-plus')).toBeInTheDocument();
+    expect(screen.getByText('cx/gpt-5.2')).toBeInTheDocument();
+    expect(screen.getAllByText('Runtime model')).toHaveLength(2);
+  });
+
+  it('shows "No models found" when model list is empty', () => {
+    render(
+      <CommandSuggestion models={[]} highlightedIndex={0} onSelect={vi.fn()} />,
+    );
+    expect(screen.getByText('No models found')).toBeInTheDocument();
+  });
+
+  it('calls onSelect with the model name when a model row is clicked', () => {
+    const onSelect = vi.fn();
+    render(
+      <CommandSuggestion
+        models={['cx/gpt-5.2']}
+        highlightedIndex={0}
+        onSelect={onSelect}
+      />,
+    );
+    fireEvent.mouseDown(screen.getByRole('option'));
+    expect(onSelect).toHaveBeenCalledWith('cx/gpt-5.2');
+    expect(onSelect).toHaveBeenCalledTimes(1);
+  });
+
+  it('calls onDeleteModel without selecting the row when delete is clicked', () => {
+    const onSelect = vi.fn();
+    const onDeleteModel = vi.fn();
+    render(
+      <CommandSuggestion
+        models={['cx/gpt-5.2']}
+        highlightedIndex={0}
+        onSelect={onSelect}
+        onDeleteModel={onDeleteModel}
+      />,
+    );
+    fireEvent.mouseDown(
+      screen.getByRole('button', { name: 'Delete cx/gpt-5.2' }),
+    );
+    expect(onDeleteModel).toHaveBeenCalledWith('cx/gpt-5.2');
+    expect(onDeleteModel).toHaveBeenCalledTimes(1);
+    expect(onSelect).not.toHaveBeenCalled();
+  });
 });

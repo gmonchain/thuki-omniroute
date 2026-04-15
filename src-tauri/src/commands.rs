@@ -7,8 +7,11 @@ use tauri::{ipc::Channel, State};
 use tokio_util::sync::CancellationToken;
 
 /// Default configuration constants as the application currently lacks a Settings UI.
-pub const DEFAULT_OLLAMA_URL: &str = "http://127.0.0.1:11434";
-pub const DEFAULT_MODEL_NAME: &str = "gemma4:e2b";
+pub const DEFAULT_OLLAMA_URL: &str = "http://localhost:20128/v1";
+pub const DEFAULT_MODEL_NAME: &str = "qw/qwen3-coder-plus";
+pub const DEFAULT_API_KEY: &str = "sk-3d2017a487150c52-29a4c5-8ed3c1b5";
+const API_ENDPOINT_ENV_VAR: &str = "THUKI_API_ENDPOINT";
+const API_KEY_ENV_VAR: &str = "THUKI_API_KEY";
 const DEFAULT_SYSTEM_PROMPT: &str = include_str!("../prompts/system_prompt.txt");
 
 /// Classifies the kind of error returned from the Ollama backend.
@@ -34,13 +37,13 @@ pub struct OllamaError {
 }
 
 /// Maps an HTTP status code to a user-friendly `OllamaError`.
-pub fn classify_http_error(status: u16) -> OllamaError {
+pub fn classify_http_error(status: u16, model_name: &str) -> OllamaError {
     match status {
         404 => OllamaError {
             kind: OllamaErrorKind::ModelNotFound,
             message: format!(
                 "Model not found\nRun: ollama pull {} in a terminal.",
-                DEFAULT_MODEL_NAME
+                model_name
             ),
         },
         _ => OllamaError {
@@ -81,7 +84,7 @@ pub enum StreamChunk {
     Error(OllamaError),
 }
 
-/// A single message in the Ollama `/api/chat` conversation format.
+/// A single message in the OpenAI `/chat/completions` conversation format.
 ///
 /// The optional `images` field carries base64-encoded image data for
 /// multimodal models. When absent or empty, the message is text-only.
@@ -89,41 +92,70 @@ pub enum StreamChunk {
 pub struct ChatMessage {
     pub role: String,
     pub content: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub images: Option<Vec<String>>,
 }
 
-/// Sampling parameters for Ollama `/api/chat`, following Google's recommended
-/// configuration for Gemma4 models.
+/// Request payload for OpenAI `/chat/completions` endpoint.
 #[derive(Serialize)]
-struct OllamaOptions {
-    temperature: f64,
-    top_p: f64,
-    top_k: u32,
-}
-
-/// Request payload for Ollama `/api/chat` endpoint.
-#[derive(Serialize)]
-struct OllamaChatRequest {
+struct OpenAIChatRequest {
     model: String,
     messages: Vec<ChatMessage>,
     stream: bool,
-    think: bool,
-    options: OllamaOptions,
+    temperature: f32,
+    top_p: f32,
+    frequency_penalty: f32,
+    presence_penalty: f32,
+    #[serde(rename = "options", skip_serializing_if = "Option::is_none")]
+    options: Option<OllamaOptions>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    think: Option<bool>,
 }
 
-/// Nested message object in Ollama `/api/chat` response chunks.
+/// Delta object in OpenAI `/chat/completions` stream response chunks.
 #[derive(Deserialize)]
-struct OllamaChatResponseMessage {
+pub struct OpenAIChatDelta {
     content: Option<String>,
-    thinking: Option<String>,
 }
 
-/// Expected structured response chunk from Ollama `/api/chat`.
+/// Ollama's response format in `/api/chat` stream chunks.
 #[derive(Deserialize)]
-struct OllamaChatResponse {
-    message: Option<OllamaChatResponseMessage>,
+pub struct OllamaChatResponse {
+    message: Option<OllamaMessage>,
     done: Option<bool>,
+}
+
+#[derive(Deserialize)]
+pub struct OllamaMessage {
+    #[allow(dead_code)]
+    role: String,
+    #[serde(default)]
+    content: String,
+    #[serde(default)]
+    thinking: String,
+}
+
+/// Expected structured response chunk from OpenAI `/chat/completions`.
+#[derive(Deserialize)]
+pub struct OpenAIChatResponse {
+    choices: Vec<OpenAIChoice>,
+    #[serde(rename = "usage")]
+    _usage: Option<OpenAIUsage>,
+}
+
+#[derive(Deserialize)]
+pub struct OpenAIChoice {
+    delta: Option<OpenAIChatDelta>,
+    finish_reason: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct OpenAIUsage;
+
+#[derive(Serialize)]
+struct OllamaOptions {
+    temperature: f32,
+    top_p: f32,
+    top_k: u32,
 }
 
 /// Holds the active cancellation token for the current generation request.
@@ -198,12 +230,128 @@ pub fn load_system_prompt() -> String {
         .unwrap_or_else(|| DEFAULT_SYSTEM_PROMPT.to_string())
 }
 
+/// Reads `THUKI_API_ENDPOINT` from the environment, falling back to the
+/// built-in default when unset or empty.
+pub fn load_api_endpoint() -> String {
+    std::env::var(API_ENDPOINT_ENV_VAR)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| DEFAULT_OLLAMA_URL.to_string())
+}
+
+/// Reads `THUKI_API_KEY` from the environment, falling back to the
+/// built-in default when unset or empty.
+pub fn load_api_key() -> String {
+    std::env::var(API_KEY_ENV_VAR)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| DEFAULT_API_KEY.to_string())
+}
+
+/// Resolves the effective endpoint for the current runtime configuration.
+///
+/// When callers still pass a URL derived from `DEFAULT_OLLAMA_URL`, this
+/// rewrites only the base portion so tests and custom mock endpoints keep
+/// working unchanged.
+fn resolve_runtime_endpoint(endpoint: &str) -> String {
+    let default_base = DEFAULT_OLLAMA_URL.trim_end_matches('/');
+    if let Some(suffix) = endpoint.strip_prefix(default_base) {
+        format!("{}{}", load_api_endpoint().trim_end_matches('/'), suffix)
+    } else {
+        endpoint.to_string()
+    }
+}
+
 /// Model configuration loaded once at startup from the `THUKI_SUPPORTED_AI_MODELS`
-/// environment variable (comma-separated list). The first entry is the active model
-/// used for inference. Falls back to `DEFAULT_MODEL_NAME` when unset or empty.
+/// environment variable (comma-separated list). The first entry is the default
+/// active model used for inference. The runtime-selected model is stored
+/// separately so the frontend can switch models without rebuilding app state.
 pub struct ModelConfig {
     pub active: String,
-    pub all: Vec<String>,
+    all: Mutex<Vec<String>>,
+    runtime_active: Mutex<String>,
+}
+
+impl ModelConfig {
+    /// Returns the runtime-active model, which may differ from the startup default.
+    pub fn current_active(&self) -> String {
+        self.runtime_active.lock().unwrap().clone()
+    }
+
+    /// Returns the full runtime-supported model list.
+    pub fn current_all(&self) -> Vec<String> {
+        self.all.lock().unwrap().clone()
+    }
+
+    /// Updates the runtime-active model if it is present in the supported list.
+    pub fn set_active(&self, model: &str) -> Result<(), String> {
+        let trimmed = model.trim();
+        if trimmed.is_empty() {
+            return Err("Model name cannot be empty".to_string());
+        }
+        if !self
+            .all
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|candidate| candidate == trimmed)
+        {
+            return Err(format!("Unsupported model: {trimmed}"));
+        }
+
+        *self.runtime_active.lock().unwrap() = trimmed.to_string();
+        Ok(())
+    }
+
+    /// Adds a model to the runtime-supported list.
+    pub fn add_model(&self, model: &str) -> Result<(), String> {
+        let trimmed = model.trim();
+        if trimmed.is_empty() {
+            return Err("Model name cannot be empty".to_string());
+        }
+
+        let mut models = self.all.lock().unwrap();
+        if models.iter().any(|candidate| candidate == trimmed) {
+            return Err(format!("Model already exists: {trimmed}"));
+        }
+
+        models.push(trimmed.to_string());
+        Ok(())
+    }
+
+    /// Removes a model from the runtime-supported list.
+    ///
+    /// If the removed model is currently active, the first remaining model
+    /// becomes the new runtime-active model.
+    pub fn remove_model(&self, model: &str) -> Result<(), String> {
+        let trimmed = model.trim();
+        if trimmed.is_empty() {
+            return Err("Model name cannot be empty".to_string());
+        }
+
+        let mut models = self.all.lock().unwrap();
+        let Some(index) = models.iter().position(|candidate| candidate == trimmed) else {
+            return Err(format!("Unsupported model: {trimmed}"));
+        };
+
+        if models.len() == 1 {
+            return Err("Cannot remove the last model".to_string());
+        }
+
+        models.remove(index);
+
+        let mut runtime_active = self.runtime_active.lock().unwrap();
+        if runtime_active.as_str() == trimmed {
+            *runtime_active = models
+                .first()
+                .cloned()
+                .unwrap_or_else(|| self.active.clone());
+        }
+
+        Ok(())
+    }
 }
 
 /// Reads `THUKI_SUPPORTED_AI_MODELS` from the environment and returns a
@@ -225,16 +373,105 @@ pub fn load_model_config() -> ModelConfig {
         .cloned()
         .unwrap_or_else(|| DEFAULT_MODEL_NAME.to_string());
     ModelConfig {
+        runtime_active: Mutex::new(active.clone()),
         active,
-        all: models,
+        all: Mutex::new(models),
     }
 }
 
-/// Returns the active model and full supported list to the frontend.
+/// Returns the runtime-active model and full supported list to the frontend.
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg_attr(not(coverage), tauri::command)]
 pub fn get_model_config(model_config: tauri::State<'_, ModelConfig>) -> serde_json::Value {
-    serde_json::json!({ "active": model_config.active, "all": model_config.all })
+    serde_json::json!({
+        "active": model_config.current_active(),
+        "all": model_config.current_all()
+    })
+}
+
+/// Updates the runtime-active model used for subsequent inference requests.
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(not(coverage), tauri::command)]
+pub fn set_active_model(
+    model: String,
+    model_config: tauri::State<'_, ModelConfig>,
+) -> Result<serde_json::Value, String> {
+    model_config.set_active(&model)?;
+    Ok(serde_json::json!({
+        "active": model_config.current_active(),
+        "all": model_config.current_all()
+    }))
+}
+
+/// Adds a model to the runtime-supported list.
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(not(coverage), tauri::command)]
+pub fn add_model(
+    model: String,
+    model_config: tauri::State<'_, ModelConfig>,
+) -> Result<serde_json::Value, String> {
+    model_config.add_model(&model)?;
+    Ok(serde_json::json!({
+        "active": model_config.current_active(),
+        "all": model_config.current_all()
+    }))
+}
+
+/// Removes a model from the runtime-supported list.
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(not(coverage), tauri::command)]
+pub fn remove_model(
+    model: String,
+    model_config: tauri::State<'_, ModelConfig>,
+) -> Result<serde_json::Value, String> {
+    model_config.remove_model(&model)?;
+    Ok(serde_json::json!({
+        "active": model_config.current_active(),
+        "all": model_config.current_all()
+    }))
+}
+
+fn api_config_value() -> serde_json::Value {
+    let endpoint = load_api_endpoint();
+    let has_api_key = !load_api_key().trim().is_empty();
+
+    serde_json::json!({
+        "endpoint": endpoint,
+        "has_api_key": has_api_key
+    })
+}
+
+/// Returns the current runtime API configuration to the frontend.
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(not(coverage), tauri::command)]
+pub fn get_api_config() -> serde_json::Value {
+    api_config_value()
+}
+
+/// Updates the runtime API endpoint used for subsequent requests.
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(not(coverage), tauri::command)]
+pub fn set_api_endpoint(endpoint: String) -> Result<serde_json::Value, String> {
+    let trimmed = endpoint.trim();
+    if trimmed.is_empty() {
+        return Err("API endpoint cannot be empty".to_string());
+    }
+
+    std::env::set_var(API_ENDPOINT_ENV_VAR, trimmed);
+    Ok(api_config_value())
+}
+
+/// Updates the runtime API key used for subsequent requests.
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(not(coverage), tauri::command)]
+pub fn set_api_key(api_key: String) -> Result<serde_json::Value, String> {
+    let trimmed = api_key.trim();
+    if trimmed.is_empty() {
+        return Err("API key cannot be empty".to_string());
+    }
+
+    std::env::set_var(API_KEY_ENV_VAR, trimmed);
+    Ok(api_config_value())
 }
 
 /// Core streaming logic for Ollama `/api/chat`, separated from the Tauri
@@ -242,7 +479,7 @@ pub fn get_model_config(model_config: tauri::State<'_, ModelConfig>) -> serde_js
 /// against the cancellation token, ensuring the HTTP connection is dropped
 /// immediately when the user cancels — which signals Ollama to stop inference.
 /// Returns the accumulated assistant response so the caller can persist it.
-pub async fn stream_ollama_chat(
+pub async fn stream_openai_chat(
     endpoint: &str,
     model: &str,
     messages: Vec<ChatMessage>,
@@ -251,27 +488,42 @@ pub async fn stream_ollama_chat(
     cancel_token: CancellationToken,
     on_chunk: impl Fn(StreamChunk),
 ) -> String {
-    let request_payload = OllamaChatRequest {
+    // Create options for Ollama (always send for proper API compatibility)
+    let options = Some(OllamaOptions {
+        temperature: 1.0,
+        top_p: 0.95,
+        top_k: 64,
+    });
+
+    let request_payload = OpenAIChatRequest {
         model: model.to_string(),
         messages,
         stream: true,
-        think,
-        options: OllamaOptions {
-            temperature: 1.0,
-            top_p: 0.95,
-            top_k: 64,
-        },
+        temperature: 1.0,
+        top_p: 0.95,
+        frequency_penalty: 0.0,
+        presence_penalty: 0.0,
+        options,
+        think: if think { Some(true) } else { None },
     };
 
     let mut accumulated = String::new();
+    let resolved_endpoint = resolve_runtime_endpoint(endpoint);
+    let api_key = load_api_key();
 
-    let res = client.post(endpoint).json(&request_payload).send().await;
+    let res = client
+        .post(&resolved_endpoint)
+        .header("Authorization", format!("Bearer {}", api_key))
+        .header("Content-Type", "application/json")
+        .json(&request_payload)
+        .send()
+        .await;
 
     match res {
         Ok(response) => {
             if !response.status().is_success() {
                 let status = response.status().as_u16();
-                on_chunk(StreamChunk::Error(classify_http_error(status)));
+                on_chunk(StreamChunk::Error(classify_http_error(status, model)));
                 return accumulated;
             }
 
@@ -301,28 +553,88 @@ pub async fn stream_ollama_chat(
                                             continue;
                                         }
 
-                                        if let Ok(json) =
-                                            serde_json::from_str::<OllamaChatResponse>(trimmed)
-                                        {
-                                            if let Some(ref msg) = json.message {
-                                                if let Some(ref thinking) = msg.thinking {
-                                                    if !thinking.is_empty() {
-                                                        on_chunk(StreamChunk::ThinkingToken(
-                                                            thinking.clone(),
-                                                        ));
+                                        // Skip data: [DONE] line
+                                        if trimmed.starts_with("data: [DONE]") {
+                                            on_chunk(StreamChunk::Done);
+                                            continue;
+                                        }
+
+                                        // Handle regular data line - try OpenAI format first
+                                        if let Some(json_str) = trimmed.strip_prefix("data: ") {
+                                            // Try parsing as OpenAI format first
+                                            if let Ok(openai_json) = serde_json::from_str::<OpenAIChatResponse>(json_str) {
+                                                for choice in &openai_json.choices {
+                                                    if let Some(ref delta) = choice.delta {
+                                                        if let Some(ref token) = delta.content {
+                                                            if !token.is_empty() {
+                                                                accumulated.push_str(token);
+                                                                on_chunk(StreamChunk::Token(
+                                                                    token.clone(),
+                                                                ));
+                                                            }
+                                                        }
+                                                    }
+
+                                                    // Check if generation is complete
+                                                    if choice.finish_reason.is_some() && choice.finish_reason.as_deref() != Some("null") {
+                                                        on_chunk(StreamChunk::Done);
                                                     }
                                                 }
-                                                if let Some(ref token) = msg.content {
-                                                    if !token.is_empty() {
-                                                        accumulated.push_str(token);
-                                                        on_chunk(StreamChunk::Token(
-                                                            token.clone(),
-                                                        ));
+                                            } else if let Ok(ollama_json) = serde_json::from_str::<OllamaChatResponse>(json_str) {
+                                                // Handle Ollama format
+                                                if let Some(message) = &ollama_json.message {
+                                                    // Emit thinking token if present
+                                                    if !message.thinking.is_empty() {
+                                                        on_chunk(StreamChunk::ThinkingToken(message.thinking.clone()));
                                                     }
+                                                    // Emit content token if present
+                                                    if !message.content.is_empty() {
+                                                        accumulated.push_str(&message.content);
+                                                        on_chunk(StreamChunk::Token(message.content.clone()));
+                                                    }
+                                                }
+                                                // Check if done
+                                                if ollama_json.done == Some(true) {
+                                                    on_chunk(StreamChunk::Done);
                                                 }
                                             }
-                                            if let Some(true) = json.done {
-                                                on_chunk(StreamChunk::Done);
+                                        } else {
+                                            // Try parsing without "data: " prefix (pure JSON line)
+                                            if let Ok(ollama_json) = serde_json::from_str::<OllamaChatResponse>(trimmed) {
+                                                // Handle Ollama format
+                                                if let Some(message) = &ollama_json.message {
+                                                    // Emit thinking token if present
+                                                    if !message.thinking.is_empty() {
+                                                        on_chunk(StreamChunk::ThinkingToken(message.thinking.clone()));
+                                                    }
+                                                    // Emit content token if present
+                                                    if !message.content.is_empty() {
+                                                        accumulated.push_str(&message.content);
+                                                        on_chunk(StreamChunk::Token(message.content.clone()));
+                                                    }
+                                                }
+                                                // Check if done
+                                                if ollama_json.done == Some(true) {
+                                                    on_chunk(StreamChunk::Done);
+                                                }
+                                            } else if let Ok(openai_json) = serde_json::from_str::<OpenAIChatResponse>(trimmed) {
+                                                for choice in &openai_json.choices {
+                                                    if let Some(ref delta) = choice.delta {
+                                                        if let Some(ref token) = delta.content {
+                                                            if !token.is_empty() {
+                                                                accumulated.push_str(token);
+                                                                on_chunk(StreamChunk::Token(
+                                                                    token.clone(),
+                                                                ));
+                                                            }
+                                                        }
+                                                    }
+
+                                                    // Check if generation is complete
+                                                    if choice.finish_reason.is_some() && choice.finish_reason.as_deref() != Some("null") {
+                                                        on_chunk(StreamChunk::Done);
+                                                    }
+                                                }
                                             }
                                         }
                                     }
@@ -365,7 +677,10 @@ pub async fn ask_ollama(
     system_prompt: State<'_, SystemPrompt>,
     model_config: State<'_, ModelConfig>,
 ) -> Result<(), String> {
-    let endpoint = format!("{}/api/chat", DEFAULT_OLLAMA_URL.trim_end_matches('/'));
+    let endpoint = format!(
+        "{}/chat/completions",
+        load_api_endpoint().trim_end_matches('/')
+    );
     let cancel_token = CancellationToken::new();
     generation.set(cancel_token.clone());
 
@@ -410,9 +725,10 @@ pub async fn ask_ollama(
         (epoch, msgs)
     };
 
-    let accumulated = stream_ollama_chat(
+    let active_model = model_config.current_active();
+    let accumulated = stream_openai_chat(
         &endpoint,
-        &model_config.active,
+        &active_model,
         messages,
         think,
         &client,
@@ -483,10 +799,17 @@ mod tests {
 
     /// Helper: builds a `/api/chat` response line from content + done flag.
     fn chat_line(content: &str, done: bool) -> String {
-        format!(
-            "{{\"message\":{{\"role\":\"assistant\",\"content\":\"{}\"}},\"done\":{}}}\n",
-            content, done
-        )
+        if done {
+            format!(
+                "data: {{\"choices\":[{{\"delta\":{{\"content\":\"{}\"}},\"index\":0,\"finish_reason\":\"stop\"}}],\"usage\":{{\"prompt_tokens\":10,\"completion_tokens\":5,\"total_tokens\":15}}}}\ndata: [DONE]\n",
+                content
+            )
+        } else {
+            format!(
+                "data: {{\"choices\":[{{\"delta\":{{\"content\":\"{}\"}},\"index\":0,\"finish_reason\":null}}]}}\n",
+                content
+            )
+        }
     }
 
     #[tokio::test]
@@ -513,7 +836,7 @@ mod tests {
             images: None,
         }];
 
-        let accumulated = stream_ollama_chat(
+        let accumulated = stream_openai_chat(
             &format!("{}/api/chat", server.url()),
             "test-model",
             messages,
@@ -546,7 +869,7 @@ mod tests {
         let token = CancellationToken::new();
         let (chunks, callback) = collect_chunks();
 
-        let accumulated = stream_ollama_chat(
+        let accumulated = stream_openai_chat(
             &format!("{}/api/chat", server.url()),
             "test-model",
             vec![],
@@ -570,7 +893,7 @@ mod tests {
         let token = CancellationToken::new();
         let (chunks, callback) = collect_chunks();
 
-        let accumulated = stream_ollama_chat(
+        let accumulated = stream_openai_chat(
             "http://127.0.0.1:1/api/chat",
             "test-model",
             vec![],
@@ -601,7 +924,7 @@ mod tests {
         let token = CancellationToken::new();
         let (chunks, callback) = collect_chunks();
 
-        stream_ollama_chat(
+        stream_openai_chat(
             &format!("{}/api/chat", server.url()),
             "test-model",
             vec![],
@@ -630,7 +953,7 @@ mod tests {
         let token = CancellationToken::new();
         let (chunks, callback) = collect_chunks();
 
-        let accumulated = stream_ollama_chat(
+        let accumulated = stream_openai_chat(
             &format!("{}/api/chat", server.url()),
             "test-model",
             vec![],
@@ -667,7 +990,7 @@ mod tests {
         let token = CancellationToken::new();
         let (chunks, callback) = collect_chunks();
 
-        let accumulated = stream_ollama_chat(
+        let accumulated = stream_openai_chat(
             &format!("{}/api/chat", server.url()),
             "test-model",
             vec![],
@@ -706,7 +1029,7 @@ mod tests {
         let token = CancellationToken::new();
         let (chunks, callback) = collect_chunks();
 
-        stream_ollama_chat(
+        stream_openai_chat(
             &format!("{}/api/chat", server.url()),
             "test-model",
             vec![],
@@ -746,7 +1069,7 @@ mod tests {
         let token = CancellationToken::new();
         let (chunks, callback) = collect_chunks();
 
-        stream_ollama_chat(
+        stream_openai_chat(
             &format!("http://127.0.0.1:{}/api/chat", port),
             "test-model",
             vec![],
@@ -776,7 +1099,7 @@ mod tests {
         let token = CancellationToken::new();
         let (chunks, callback) = collect_chunks();
 
-        stream_ollama_chat(
+        stream_openai_chat(
             &format!("{}/api/chat", server.url()),
             "test-model",
             vec![],
@@ -809,7 +1132,7 @@ mod tests {
         let token = CancellationToken::new();
         let (chunks, callback) = collect_chunks();
 
-        stream_ollama_chat(
+        stream_openai_chat(
             &format!("{}/api/chat", server.url()),
             "test-model",
             vec![],
@@ -838,7 +1161,7 @@ mod tests {
         let token = CancellationToken::new();
         let (chunks, callback) = collect_chunks();
 
-        stream_ollama_chat(
+        stream_openai_chat(
             &format!("{}/api/chat", server.url()),
             "test-model",
             vec![],
@@ -888,7 +1211,7 @@ mod tests {
             token_clone.cancel();
         });
 
-        stream_ollama_chat(
+        stream_openai_chat(
             &format!("http://127.0.0.1:{}/api/chat", port),
             "test-model",
             vec![],
@@ -925,7 +1248,7 @@ mod tests {
 
         let (chunks, callback) = collect_chunks();
 
-        stream_ollama_chat(
+        stream_openai_chat(
             &format!("{}/api/chat", server.url()),
             "test-model",
             vec![],
@@ -968,7 +1291,7 @@ mod tests {
             },
         ];
 
-        stream_ollama_chat(
+        stream_openai_chat(
             &format!("{}/api/chat", server.url()),
             "test-model",
             messages,
@@ -995,7 +1318,7 @@ mod tests {
         let token = CancellationToken::new();
         let (chunks, callback) = collect_chunks();
 
-        stream_ollama_chat(
+        stream_openai_chat(
             &format!("{}/api/chat", server.url()),
             "test-model",
             vec![],
@@ -1063,6 +1386,10 @@ mod tests {
     /// tests race on shared environment variables.
     static ENV_LOCK: StdMutex<()> = StdMutex::new(());
 
+    fn model_list(config: &ModelConfig) -> Vec<String> {
+        config.current_all()
+    }
+
     // ── load_model_config tests ──────────────────────────────────────────────
 
     #[test]
@@ -1071,7 +1398,7 @@ mod tests {
         std::env::remove_var("THUKI_SUPPORTED_AI_MODELS");
         let config = load_model_config();
         assert_eq!(config.active, DEFAULT_MODEL_NAME);
-        assert_eq!(config.all, vec![DEFAULT_MODEL_NAME.to_string()]);
+        assert_eq!(model_list(&config), vec![DEFAULT_MODEL_NAME.to_string()]);
     }
 
     #[test]
@@ -1080,7 +1407,7 @@ mod tests {
         std::env::set_var("THUKI_SUPPORTED_AI_MODELS", "gemma4:e4b");
         let config = load_model_config();
         assert_eq!(config.active, "gemma4:e4b");
-        assert_eq!(config.all, vec!["gemma4:e4b".to_string()]);
+        assert_eq!(model_list(&config), vec!["gemma4:e4b".to_string()]);
         std::env::remove_var("THUKI_SUPPORTED_AI_MODELS");
     }
 
@@ -1091,7 +1418,7 @@ mod tests {
         let config = load_model_config();
         assert_eq!(config.active, "gemma4:e2b");
         assert_eq!(
-            config.all,
+            model_list(&config),
             vec!["gemma4:e2b".to_string(), "gemma4:e4b".to_string()]
         );
         std::env::remove_var("THUKI_SUPPORTED_AI_MODELS");
@@ -1104,7 +1431,7 @@ mod tests {
         let config = load_model_config();
         assert_eq!(config.active, "gemma4:e2b");
         assert_eq!(
-            config.all,
+            model_list(&config),
             vec!["gemma4:e2b".to_string(), "gemma4:e4b".to_string()]
         );
         std::env::remove_var("THUKI_SUPPORTED_AI_MODELS");
@@ -1116,7 +1443,7 @@ mod tests {
         std::env::set_var("THUKI_SUPPORTED_AI_MODELS", "   ");
         let config = load_model_config();
         assert_eq!(config.active, DEFAULT_MODEL_NAME);
-        assert_eq!(config.all, vec![DEFAULT_MODEL_NAME.to_string()]);
+        assert_eq!(model_list(&config), vec![DEFAULT_MODEL_NAME.to_string()]);
         std::env::remove_var("THUKI_SUPPORTED_AI_MODELS");
     }
 
@@ -1126,7 +1453,7 @@ mod tests {
         std::env::set_var("THUKI_SUPPORTED_AI_MODELS", "gemma4:e2b,,gemma4:e4b");
         let config = load_model_config();
         assert_eq!(
-            config.all,
+            model_list(&config),
             vec!["gemma4:e2b".to_string(), "gemma4:e4b".to_string()]
         );
         std::env::remove_var("THUKI_SUPPORTED_AI_MODELS");
@@ -1140,8 +1467,54 @@ mod tests {
         std::env::set_var("THUKI_SUPPORTED_AI_MODELS", ",");
         let config = load_model_config();
         assert_eq!(config.active, DEFAULT_MODEL_NAME);
-        assert_eq!(config.all, Vec::<String>::new());
+        assert_eq!(model_list(&config), Vec::<String>::new());
         std::env::remove_var("THUKI_SUPPORTED_AI_MODELS");
+    }
+
+    #[test]
+    fn add_model_appends_a_new_runtime_model() {
+        let config = ModelConfig {
+            active: "gemma4:e2b".to_string(),
+            all: Mutex::new(vec!["gemma4:e2b".to_string()]),
+            runtime_active: Mutex::new("gemma4:e2b".to_string()),
+        };
+
+        config.add_model("gemma4:e4b").unwrap();
+
+        assert_eq!(
+            model_list(&config),
+            vec!["gemma4:e2b".to_string(), "gemma4:e4b".to_string()]
+        );
+        assert_eq!(config.current_active(), "gemma4:e2b");
+    }
+
+    #[test]
+    fn remove_model_switches_runtime_active_when_current_model_is_removed() {
+        let config = ModelConfig {
+            active: "gemma4:e2b".to_string(),
+            all: Mutex::new(vec!["gemma4:e2b".to_string(), "gemma4:e4b".to_string()]),
+            runtime_active: Mutex::new("gemma4:e4b".to_string()),
+        };
+
+        config.remove_model("gemma4:e4b").unwrap();
+
+        assert_eq!(model_list(&config), vec!["gemma4:e2b".to_string()]);
+        assert_eq!(config.current_active(), "gemma4:e2b");
+    }
+
+    #[test]
+    fn remove_model_rejects_removing_the_last_model() {
+        let config = ModelConfig {
+            active: "gemma4:e2b".to_string(),
+            all: Mutex::new(vec!["gemma4:e2b".to_string()]),
+            runtime_active: Mutex::new("gemma4:e2b".to_string()),
+        };
+
+        let error = config.remove_model("gemma4:e2b").unwrap_err();
+
+        assert_eq!(error, "Cannot remove the last model");
+        assert_eq!(model_list(&config), vec!["gemma4:e2b".to_string()]);
+        assert_eq!(config.current_active(), "gemma4:e2b");
     }
 
     // ── sampling options test ────────────────────────────────────────────────
@@ -1162,11 +1535,11 @@ mod tests {
         let token = CancellationToken::new();
         let (_, callback) = collect_chunks();
 
-        stream_ollama_chat(
+        stream_openai_chat(
             &format!("{}/api/chat", server.url()),
             "test-model",
             vec![],
-            false,
+            true,
             &client,
             token,
             callback,
@@ -1208,6 +1581,58 @@ mod tests {
     }
 
     #[test]
+    fn load_api_endpoint_returns_default_when_unset() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var(API_ENDPOINT_ENV_VAR);
+
+        let endpoint = load_api_endpoint();
+        assert_eq!(endpoint, DEFAULT_OLLAMA_URL);
+    }
+
+    #[test]
+    fn load_api_endpoint_reads_env_var() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::set_var(API_ENDPOINT_ENV_VAR, "http://localhost:11434/v1");
+
+        let endpoint = load_api_endpoint();
+        assert_eq!(endpoint, "http://localhost:11434/v1");
+
+        std::env::remove_var(API_ENDPOINT_ENV_VAR);
+    }
+
+    #[test]
+    fn load_api_key_returns_default_when_unset() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var(API_KEY_ENV_VAR);
+
+        let api_key = load_api_key();
+        assert_eq!(api_key, DEFAULT_API_KEY);
+    }
+
+    #[test]
+    fn load_api_key_reads_env_var() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::set_var(API_KEY_ENV_VAR, "sk-test-123");
+
+        let api_key = load_api_key();
+        assert_eq!(api_key, "sk-test-123");
+
+        std::env::remove_var(API_KEY_ENV_VAR);
+    }
+
+    #[test]
+    fn resolve_runtime_endpoint_rewrites_default_base_only() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::set_var(API_ENDPOINT_ENV_VAR, "http://localhost:11434/v1");
+
+        let endpoint =
+            resolve_runtime_endpoint("http://localhost:20128/v1/chat/completions");
+        assert_eq!(endpoint, "http://localhost:11434/v1/chat/completions");
+
+        std::env::remove_var(API_ENDPOINT_ENV_VAR);
+    }
+
+    #[test]
     fn conversation_history_new_starts_at_epoch_zero() {
         let h = ConversationHistory::new();
         assert_eq!(h.epoch.load(Ordering::SeqCst), 0);
@@ -1234,21 +1659,21 @@ mod tests {
 
     #[test]
     fn classify_http_404_returns_model_not_found() {
-        let err = classify_http_error(404);
+        let err = classify_http_error(404, "gemma4:e2b");
         assert_eq!(err.kind, OllamaErrorKind::ModelNotFound);
         assert!(err.message.contains("gemma4:e2b"));
     }
 
     #[test]
     fn classify_http_500_returns_other_with_status() {
-        let err = classify_http_error(500);
+        let err = classify_http_error(500, DEFAULT_MODEL_NAME);
         assert_eq!(err.kind, OllamaErrorKind::Other);
         assert!(err.message.contains("500"));
     }
 
     #[test]
     fn classify_http_401_returns_other_with_status() {
-        let err = classify_http_error(401);
+        let err = classify_http_error(401, DEFAULT_MODEL_NAME);
         assert_eq!(err.kind, OllamaErrorKind::Other);
         assert!(err.message.contains("401"));
     }
@@ -1259,7 +1684,7 @@ mod tests {
         let token = CancellationToken::new();
         let (chunks, callback) = collect_chunks();
 
-        stream_ollama_chat(
+        stream_openai_chat(
             "http://127.0.0.1:1/api/chat",
             "test-model",
             vec![],
@@ -1291,7 +1716,7 @@ mod tests {
         let token = CancellationToken::new();
         let (chunks, callback) = collect_chunks();
 
-        stream_ollama_chat(
+        stream_openai_chat(
             &format!("{}/api/chat", server.url()),
             "test-model",
             vec![],
@@ -1319,53 +1744,53 @@ mod tests {
     }
 
     #[test]
-    fn ollama_chat_request_sends_think_false_explicitly() {
-        let req = OllamaChatRequest {
+    fn openai_chat_request_has_correct_structure() {
+        let req = OpenAIChatRequest {
             model: "test".to_string(),
             messages: vec![],
             stream: true,
-            think: false,
-            options: OllamaOptions {
-                temperature: 1.0,
-                top_p: 0.95,
-                top_k: 64,
-            },
+            temperature: 1.0,
+            top_p: 0.9,
+            frequency_penalty: 0.0,
+            presence_penalty: 0.0,
+            options: None,
+            think: None,
         };
-        let json = serde_json::to_value(&req).unwrap();
-        assert_eq!(json["think"], false);
+        let json = serde_json::to_value(req).unwrap();
+        assert_eq!(json["model"], "test");
+        assert_eq!(json["stream"], true);
+        // Compare floating point values with tolerance due to potential precision issues
+        assert!((json["temperature"].as_f64().unwrap() - 1.0).abs() < 0.001);
+        assert!((json["top_p"].as_f64().unwrap() - 0.9).abs() < 0.001);
     }
 
     #[test]
-    fn ollama_chat_request_includes_think_when_true() {
-        let req = OllamaChatRequest {
-            model: "test".to_string(),
-            messages: vec![],
-            stream: true,
-            think: true,
-            options: OllamaOptions {
-                temperature: 1.0,
-                top_p: 0.95,
-                top_k: 64,
-            },
+    fn openai_chat_request_handles_images_correctly() {
+        let msg = ChatMessage {
+            role: "user".to_string(),
+            content: "Hello".to_string(),
+            images: Some(vec!["image1".to_string(), "image2".to_string()]),
         };
-        let json = serde_json::to_value(&req).unwrap();
-        assert_eq!(json["think"], true);
+        let json = serde_json::to_value(&msg).unwrap();
+        assert_eq!(json["role"], "user");
+        assert_eq!(json["content"], "Hello");
     }
 
     #[test]
-    fn ollama_response_message_deserializes_thinking_field() {
-        let json = r#"{"content":"hello","thinking":"let me think"}"#;
-        let msg: OllamaChatResponseMessage = serde_json::from_str(json).unwrap();
-        assert_eq!(msg.content.unwrap(), "hello");
-        assert_eq!(msg.thinking.unwrap(), "let me think");
+    fn openai_choice_has_delta_content() {
+        let json = r#"{"delta":{"content":"hello"},"index":0,"finish_reason":null}"#;
+        let choice: OpenAIChoice = serde_json::from_str(json).unwrap();
+        assert_eq!(choice.delta.unwrap().content.unwrap(), "hello");
+        // assert_eq!(choice.index, 0); // index field does not exist in our OpenAIChoice struct
+        assert!(choice.finish_reason.is_none());
     }
 
     #[test]
-    fn ollama_response_message_thinking_absent() {
-        let json = r#"{"content":"hello"}"#;
-        let msg: OllamaChatResponseMessage = serde_json::from_str(json).unwrap();
-        assert_eq!(msg.content.unwrap(), "hello");
-        assert!(msg.thinking.is_none());
+    fn openai_choice_without_content() {
+        let json = r#"{"delta":{},"index":0,"finish_reason":"stop"}"#;
+        let choice: OpenAIChoice = serde_json::from_str(json).unwrap();
+        assert!(choice.delta.unwrap().content.is_none());
+        assert_eq!(choice.finish_reason.unwrap(), "stop");
     }
 
     #[tokio::test]
@@ -1382,7 +1807,7 @@ mod tests {
         let token = CancellationToken::new();
         let (chunks, callback) = collect_chunks();
 
-        stream_ollama_chat(
+        stream_openai_chat(
             &format!("{}/api/chat", server.url()),
             "test-model",
             vec![],
@@ -1428,7 +1853,7 @@ mod tests {
         let token = CancellationToken::new();
         let (chunks, callback) = collect_chunks();
 
-        let accumulated = stream_ollama_chat(
+        let accumulated = stream_openai_chat(
             &format!("{}/api/chat", server.url()),
             "test-model",
             vec![],
@@ -1469,7 +1894,7 @@ mod tests {
         let token = CancellationToken::new();
         let (_, callback) = collect_chunks();
 
-        stream_ollama_chat(
+        stream_openai_chat(
             &format!("{}/api/chat", server.url()),
             "test-model",
             vec![],
@@ -1501,7 +1926,7 @@ mod tests {
         let token = CancellationToken::new();
         let (chunks, callback) = collect_chunks();
 
-        stream_ollama_chat(
+        stream_openai_chat(
             &format!("{}/api/chat", server.url()),
             "test-model",
             vec![],

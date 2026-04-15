@@ -243,14 +243,15 @@ pub async fn generate_title(
     ];
 
     let endpoint = format!(
-        "{}/api/chat",
+        "{}/chat/completions",
         crate::commands::DEFAULT_OLLAMA_URL.trim_end_matches('/')
     );
 
     let cancel_token = tokio_util::sync::CancellationToken::new();
-    let accumulated = crate::commands::stream_ollama_chat(
+    let active_model = model_config.current_active();
+    let accumulated = crate::commands::stream_openai_chat(
         &endpoint,
-        &model_config.active,
+        &active_model,
         title_messages,
         false,
         &client,

@@ -29,6 +29,36 @@ export const COMMANDS: readonly Command[] = [
     description: 'Think deeply before answering',
   },
   {
+    trigger: '/add-model',
+    label: '/add-model',
+    description: 'Add a model to the runtime model list',
+  },
+  {
+    trigger: '/del-model',
+    label: '/del-model',
+    description: 'Remove a model from the runtime model list',
+  },
+  {
+    trigger: '/history',
+    label: '/history',
+    description: 'Toggle the history panel',
+  },
+  {
+    trigger: '/model',
+    label: '/model',
+    description: 'Show the runtime model list',
+  },
+  {
+    trigger: '/endpoint',
+    label: '/endpoint',
+    description: 'Update the runtime API endpoint',
+  },
+  {
+    trigger: '/api-key',
+    label: '/api-key',
+    description: 'Update the runtime API key',
+  },
+  {
     trigger: '/translate',
     label: '/translate',
     description: 'Translate text to another language',

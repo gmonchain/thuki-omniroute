@@ -245,6 +245,81 @@ const ACTION_ICON = (
   </svg>
 );
 
+/** Model icon for /model-related UI. */
+const MODEL_ICON = (
+  <svg
+    width="14"
+    height="14"
+    viewBox="0 0 16 16"
+    fill="none"
+    xmlns="http://www.w3.org/2000/svg"
+    aria-hidden="true"
+  >
+    <ellipse
+      cx="8"
+      cy="3.5"
+      rx="5.5"
+      ry="2"
+      stroke="currentColor"
+      strokeWidth="1.3"
+    />
+    <path
+      d="M2.5 3.5v4c0 1.1 2.46 2 5.5 2s5.5-.9 5.5-2v-4"
+      stroke="currentColor"
+      strokeWidth="1.3"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+    <path
+      d="M2.5 7.5v4c0 1.1 2.46 2 5.5 2s5.5-.9 5.5-2v-4"
+      stroke="currentColor"
+      strokeWidth="1.3"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
+/** Clock icon for /history command. */
+const HISTORY_ICON = (
+  <svg
+    width="14"
+    height="14"
+    viewBox="0 0 16 16"
+    fill="none"
+    xmlns="http://www.w3.org/2000/svg"
+    aria-hidden="true"
+  >
+    <circle cx="8" cy="8" r="6.5" stroke="currentColor" strokeWidth="1.3" />
+    <path
+      d="M8 4.5V8L10.5 9.5"
+      stroke="currentColor"
+      strokeWidth="1.3"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
+/** Delete icon shown on model rows. */
+const DELETE_ICON = (
+  <svg
+    width="12"
+    height="12"
+    viewBox="0 0 16 16"
+    fill="none"
+    xmlns="http://www.w3.org/2000/svg"
+    aria-hidden="true"
+  >
+    <path
+      d="M4 4L12 12M12 4L4 12"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+    />
+  </svg>
+);
+
 /** Returns the icon for a given command trigger. */
 function iconForTrigger(trigger: string): React.ReactNode {
   switch (trigger) {
@@ -252,6 +327,12 @@ function iconForTrigger(trigger: string): React.ReactNode {
       return SCREEN_ICON;
     case '/think':
       return THINK_ICON;
+    case '/model':
+    case '/add-model':
+    case '/del-model':
+      return MODEL_ICON;
+    case '/history':
+      return HISTORY_ICON;
     case '/translate':
       return TRANSLATE_ICON;
     case '/rewrite':
@@ -271,11 +352,15 @@ function iconForTrigger(trigger: string): React.ReactNode {
 
 interface CommandSuggestionProps {
   /** Filtered list of matching commands to display (computed by parent). */
-  commands: readonly Command[];
+  commands?: readonly Command[];
+  /** Optional runtime model items shown in the same suggestion popover UI. */
+  models?: readonly string[];
   /** Index of the currently highlighted row (-1 means nothing highlighted). */
   highlightedIndex: number;
-  /** Called with the trigger string when a row is clicked. */
-  onSelect: (trigger: string) => void;
+  /** Called with the selected trigger or model name when a row is clicked. */
+  onSelect: (value: string) => void;
+  /** Called when the user clicks the delete button on a model row. */
+  onDeleteModel?: (model: string) => void;
 }
 
 /**
@@ -286,26 +371,101 @@ interface CommandSuggestionProps {
  * and a Tab badge on the highlighted row.
  */
 export function CommandSuggestion({
-  commands,
+  commands = [],
+  models,
   highlightedIndex,
   onSelect,
+  onDeleteModel,
 }: CommandSuggestionProps) {
+  const isModelMode = models !== undefined;
+  const listboxLabel = isModelMode
+    ? 'Model suggestions'
+    : 'Command suggestions';
+  const headerLabel = isModelMode ? 'Models' : 'Commands';
+  const emptyLabel = isModelMode ? 'No models found' : 'No commands found';
+
   return (
     <div
       className="mb-1 rounded-xl border border-surface-border bg-surface-base backdrop-blur-2xl shadow-bar overflow-hidden"
       role="listbox"
-      aria-label="Command suggestions"
+      aria-label={listboxLabel}
     >
       {/* Header */}
       <div className="px-3 pt-2 pb-1">
         <span className="text-[10px] font-semibold tracking-widest text-text-secondary uppercase">
-          Commands
+          {headerLabel}
         </span>
       </div>
 
-      {commands.length === 0 ? (
+      {isModelMode ? (
+        models.length === 0 ? (
+          <div className="px-3 pb-2 text-sm text-text-secondary italic">
+            {emptyLabel}
+          </div>
+        ) : (
+          <ul
+            className="pb-1 max-h-[112px] overflow-y-auto"
+            role="presentation"
+          >
+            {models.map((model, index) => {
+              const isHighlighted = index === highlightedIndex;
+              return (
+                <li
+                  key={model}
+                  role="option"
+                  aria-selected={isHighlighted}
+                  className={`flex items-center gap-2.5 px-3 py-1.5 cursor-pointer select-none transition-colors duration-100 ${
+                    isHighlighted
+                      ? 'bg-white/8 text-text-primary'
+                      : 'text-text-secondary hover:bg-white/5 hover:text-text-primary'
+                  }`}
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    onSelect(model);
+                  }}
+                >
+                  <span
+                    className={`shrink-0 ${isHighlighted ? 'text-primary' : ''}`}
+                  >
+                    {MODEL_ICON}
+                  </span>
+
+                  <span className="text-sm font-medium text-text-primary min-w-0 truncate flex-1">
+                    {model}
+                  </span>
+
+                  <span className="text-xs text-text-secondary shrink-0">
+                    Runtime model
+                  </span>
+
+                  {onDeleteModel && (
+                    <button
+                      type="button"
+                      aria-label={`Delete ${model}`}
+                      className="shrink-0 flex h-6 w-6 items-center justify-center rounded-md text-text-secondary hover:bg-red-500/10 hover:text-red-400 transition-colors duration-100"
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        onDeleteModel(model);
+                      }}
+                    >
+                      {DELETE_ICON}
+                    </button>
+                  )}
+
+                  {isHighlighted && (
+                    <span className="shrink-0 text-[10px] font-medium text-text-secondary border border-surface-border rounded px-1 py-0.5 leading-none">
+                      Tab
+                    </span>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        )
+      ) : commands.length === 0 ? (
         <div className="px-3 pb-2 text-sm text-text-secondary italic">
-          No commands found
+          {emptyLabel}
         </div>
       ) : (
         <ul className="pb-1 max-h-[112px] overflow-y-auto" role="presentation">

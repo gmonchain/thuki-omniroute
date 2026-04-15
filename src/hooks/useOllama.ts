@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
 import { invoke, Channel } from '@tauri-apps/api/core';
 
-/** Mirrors the Rust OllamaErrorKind enum sent over IPC. */
+/** Mirrors the Rust AIErrorKind enum sent over IPC. */
 export type OllamaErrorKind = 'NotRunning' | 'ModelNotFound' | 'Other';
 
 /**
@@ -33,7 +33,7 @@ export type StreamChunk =
   | { type: 'Error'; data: { kind: OllamaErrorKind; message: string } };
 
 /**
- * A custom hook that simplifies interactions with the local Ollama LLM.
+ * A custom hook that simplifies interactions with the local AI LLM.
  * It manages message history, streaming state, and sets up Rust IPC channels.
  *
  * @param onTurnComplete Optional callback invoked after a complete user/assistant
@@ -49,7 +49,7 @@ export function useOllama(
   const [isGenerating, setIsGenerating] = useState(false);
 
   /**
-   * Submits a message to the Ollama backend and initiates the streaming response.
+   * Submits a message to the AI backend and initiates the streaming response.
    * The backend manages conversation history — only the new user message is sent.
    *
    * Streams tokens directly into the messages array. An empty assistant placeholder
@@ -58,7 +58,7 @@ export function useOllama(
    * @param displayContent The user's query as it should appear in the chat bubble.
    * @param quotedText Optional selected text quoted alongside this message.
    * @param imagePaths Optional array of absolute file paths for attached images.
-   * @param think When true, enables Ollama's thinking/reasoning mode.
+   * @param think When true, enables the AI's thinking/reasoning mode.
    * @param promptOverride When provided, sent to the backend as the actual message
    *   instead of displayContent. The chat bubble still shows displayContent.
    *   Used by utility slash commands to send a composed prompt template while
@@ -164,7 +164,7 @@ export function useOllama(
           {
             id: crypto.randomUUID(),
             role: 'assistant',
-            content: 'Something went wrong\nCould not reach Ollama.',
+            content: 'Something went wrong\nCould not reach the AI service.',
             errorKind: 'Other' as const,
           },
         ]);

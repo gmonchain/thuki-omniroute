@@ -742,6 +742,18 @@ pub fn run() {
             #[cfg(not(coverage))]
             commands::get_model_config,
             #[cfg(not(coverage))]
+            commands::set_active_model,
+            #[cfg(not(coverage))]
+            commands::add_model,
+            #[cfg(not(coverage))]
+            commands::remove_model,
+            #[cfg(not(coverage))]
+            commands::get_api_config,
+            #[cfg(not(coverage))]
+            commands::set_api_endpoint,
+            #[cfg(not(coverage))]
+            commands::set_api_key,
+            #[cfg(not(coverage))]
             history::save_conversation,
             #[cfg(not(coverage))]
             history::persist_message,
