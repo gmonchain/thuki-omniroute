@@ -210,3 +210,6 @@ export function useAiChat(
     loadMessages,
   };
 }
+
+/** Backward-compatible alias kept for older imports and tests. */
+export const useOllama = useAiChat;
