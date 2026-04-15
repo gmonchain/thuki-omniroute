@@ -4,11 +4,10 @@ import { invoke } from '@tauri-apps/api/core';
 import { CTAButton } from '../PermissionsStep';
 
 interface Props {
-  onComplete: () => void;
   onBack: () => void;
 }
 
-export function ApiSetupStep({ onComplete, onBack }: Props) {
+export function ApiSetupStep({ onBack }: Props) {
   const [endpoint, setEndpoint] = useState('https://openrouter.ai/api/v1');
   const [apiKey, setApiKey] = useState('');
   const [loading, setLoading] = useState(false);

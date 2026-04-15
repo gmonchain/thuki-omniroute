@@ -441,9 +441,7 @@ export function PermissionsStep({ onNext }: PermissionsStepProps) {
           <>
             {!screenGranted && (
               <CTAButton
-                onClick={
-                  isScreenPolling ? undefined : handleOpenScreenRecording
-                }
+                onClick={handleOpenScreenRecording}
                 disabled={isScreenPolling}
                 aria-label={
                   isScreenPolling
@@ -501,7 +499,7 @@ interface CTAButtonProps {
 }
 
 /** Primary action button with a subtle lift-and-brighten hover effect. */
-function CTAButton({
+export function CTAButton({
   onClick,
   disabled,
   'aria-label': ariaLabel,

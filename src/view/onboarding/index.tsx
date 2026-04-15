@@ -16,7 +16,7 @@ interface Props {
  * Renders the correct step based on the persisted onboarding stage emitted
  * by the backend at startup. The stage advances on the backend:
  *
- *   permissions -> (quit+reopen) -> intro -> complete (normal app)
+ *   permissions -> (quit+reopen) -> api-setup -> complete (normal app)
  *
  * When stage is "complete" the backend never emits the onboarding event,
  * so this component is never rendered.
@@ -33,12 +33,7 @@ export function OnboardingView({ stage, onComplete }: Props) {
   }
 
   if (currentStage === 'api-setup') {
-    return (
-      <ApiSetupStep
-        onComplete={onComplete}
-        onBack={() => setCurrentStage('permissions')}
-      />
-    );
+    return <ApiSetupStep onBack={() => setCurrentStage('permissions')} />;
   }
 
   return <PermissionsStep onNext={() => setCurrentStage('api-setup')} />;
