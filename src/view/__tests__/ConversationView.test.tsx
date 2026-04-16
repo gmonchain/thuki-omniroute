@@ -52,6 +52,34 @@ describe('ConversationView', () => {
     expect(dots.length).toBeGreaterThanOrEqual(9);
   });
 
+  it('adds extra bottom padding while generating so the loading state is not clipped above the input area', () => {
+    const { container, rerender } = render(
+      <ConversationView
+        messages={[{ id: '1', role: 'assistant' as const, content: '' }]}
+        isGenerating={true}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const scrollEl = container.querySelector(
+      '.chat-messages-scroll',
+    ) as HTMLElement;
+    expect(scrollEl).not.toBeNull();
+    expect(scrollEl.classList.contains('pb-6')).toBe(true);
+    expect(scrollEl.classList.contains('pb-4')).toBe(false);
+
+    rerender(
+      <ConversationView
+        messages={[{ id: '1', role: 'assistant' as const, content: 'done' }]}
+        isGenerating={false}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(scrollEl.classList.contains('pb-4')).toBe(true);
+    expect(scrollEl.classList.contains('pb-6')).toBe(false);
+  });
+
   it('hides TypingIndicator when assistant content arrives', () => {
     const { container } = render(
       <ConversationView

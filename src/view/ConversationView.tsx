@@ -176,7 +176,9 @@ export function ConversationView({
 
       <div
         ref={scrollContainerRef}
-        className="chat-messages-scroll px-5 py-4 flex flex-col gap-3 flex-1 min-h-0 overflow-y-auto"
+        className={`chat-messages-scroll px-5 pt-4 flex flex-col gap-3 flex-1 min-h-0 overflow-y-auto ${
+          flow.isGenerating ? 'pb-6' : 'pb-4'
+        }`}
       >
         {flow.renderItems.map(
           ({ message, index, isStreaming, isThinking, hide }) => {

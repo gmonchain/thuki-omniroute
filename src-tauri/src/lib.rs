@@ -559,6 +559,24 @@ fn finish_onboarding(
     Ok(())
 }
 
+// ─── Cursor-event passthrough ────────────────────────────────────────────────
+
+/// Sets whether the main window should ignore mouse/cursor events.
+///
+/// Called by the frontend when entering compact pill mode (ignore = true)
+/// so the transparent window area does not block interaction with windows
+/// behind it, and when expanding back to full conversation (ignore = false).
+#[tauri::command]
+#[cfg(target_os = "macos")]
+fn set_ignore_mouse_events(app_handle: tauri::AppHandle, ignore: bool) {
+    let handle = app_handle.clone();
+    let _ = app_handle.run_on_main_thread(move || {
+        if let Some(window) = handle.get_webview_window("main") {
+            let _ = window.set_ignore_cursor_events(ignore);
+        }
+    });
+}
+
 // ─── NSPanel initialisation ─────────────────────────────────────────────────
 
 /// Converts the main Tauri window into an NSPanel and applies the overlay
@@ -892,6 +910,8 @@ pub fn run() {
             notify_frontend_ready,
             set_window_frame,
             move_overlay_to_compact_top_center,
+            #[cfg(target_os = "macos")]
+            set_ignore_mouse_events,
             #[cfg(not(coverage))]
             permissions::check_accessibility_permission,
             #[cfg(not(coverage))]

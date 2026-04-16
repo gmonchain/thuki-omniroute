@@ -300,6 +300,33 @@ describe('AskBarView', () => {
     expect(btn.classList.contains('stop-btn-ring')).toBe(true);
   });
 
+  it('renders the loading ring overlay inside the stop button while generating', () => {
+    const { container } = render(
+      <AskBarView
+        {...IMAGE_DEFAULTS}
+        query=""
+        setQuery={vi.fn()}
+        isChatMode={true}
+        isGenerating={true}
+        onSubmit={vi.fn()}
+        onCancel={vi.fn()}
+        inputRef={makeRef()}
+      />,
+    );
+
+    const btn = screen.getByRole('button', { name: 'Stop generating' });
+    const ringSvg = btn.querySelector('.stop-ring-svg');
+    const stopIcon = btn.querySelector('rect[fill="currentColor"]');
+
+    expect(btn.classList.contains('stop-btn-ring')).toBe(true);
+    expect(btn.classList.contains('rounded-full')).toBe(true);
+    expect(ringSvg).not.toBeNull();
+    expect(stopIcon).not.toBeNull();
+    expect(container.querySelector('.stop-btn-ring > .stop-ring-svg')).toBe(
+      ringSvg,
+    );
+  });
+
   it('does not call onSubmit when stop button is clicked during generation', () => {
     const onSubmit = vi.fn();
     render(

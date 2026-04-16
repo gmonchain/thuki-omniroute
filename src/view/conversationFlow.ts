@@ -31,6 +31,12 @@ export interface ConversationFlowInput {
    * (image processing, screenshot capture, etc).
    */
   isSubmitPending?: boolean;
+  /**
+   * Optional explicit chat-mode flag supplied by a caller that already knows
+   * the surface should behave like an active conversation even when the shared
+   * flow has no committed messages yet.
+   */
+  isChatMode?: boolean;
   /** Current model selection for the ask bar. */
   selectedModel?: string;
   /** Available models for the ask bar. */
@@ -272,7 +278,7 @@ export function createConversationFlow(
   const isBusy = isGenerating || isSubmitPending;
 
   const hasMessages = visibleMessages.length > 0;
-  const isChatMode = hasMessages || isBusy;
+  const isChatMode = input.isChatMode ?? (hasMessages || isBusy);
   const latestAssistantMessage = getLatestAssistantMessage(visibleMessages);
   const latestUserMessage = getLatestUserMessage(visibleMessages);
 
@@ -476,8 +482,7 @@ export function selectCompactConversationPillFlow(
     showsErrorDot: model.compactShowsErrorDot,
     showsIdleDot: model.compactShowsIdleDot,
     textColor: COMPACT_TEXT_COLORS[model.compactTone],
-    indicatorBackground:
-      COMPACT_INDICATOR_BACKGROUNDS[model.compactTone],
+    indicatorBackground: COMPACT_INDICATOR_BACKGROUNDS[model.compactTone],
     indicatorBorder: COMPACT_INDICATOR_BORDERS[model.compactTone],
   };
 }

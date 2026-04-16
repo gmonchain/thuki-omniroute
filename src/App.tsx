@@ -46,14 +46,14 @@ const OVERLAY_COMPACT_TOGGLE_EVENT = 'thuki://compact-toggle';
  * in non-key windows, which stalls spring animations indefinitely and makes
  * `AnimatePresence.onExitComplete` unreliable when the panel is unfocused.
  */
-const HIDE_COMMIT_DELAY_MS = 350;
+const HIDE_COMMIT_DELAY_MS = 130;
 
 /** Must match `OVERLAY_LOGICAL_WIDTH` in `src-tauri/src/lib.rs`. */
 const OVERLAY_WIDTH = 600;
 /** Total transparent padding around the morphing container: pt-2(8) + pb-6(24) + motion py-2(16). */
-const CONTAINER_VERTICAL_PADDING = 48;
+const CONTAINER_VERTICAL_PADDING = 150;
 /** Max morphing-container height in chat mode (matches `max-h-[600px]`) + vertical padding. */
-const MAX_CHAT_WINDOW_HEIGHT = 600 + CONTAINER_VERTICAL_PADDING;
+const MAX_CHAT_WINDOW_HEIGHT = 100 + CONTAINER_VERTICAL_PADDING;
 
 /** Must match `OVERLAY_LOGICAL_HEIGHT_COLLAPSED` in `src-tauri/src/lib.rs`. */
 const COLLAPSED_WINDOW_HEIGHT = 80;
@@ -1454,6 +1454,7 @@ function App() {
       compactTransitionTimerRef.current = null;
     }
 
+    void invoke('set_ignore_mouse_events', { ignore: false });
     setCompactMode('expanded');
     const previousFrame = preCompactWindowFrameRef.current;
     if (!previousFrame) return;
@@ -1530,6 +1531,7 @@ function App() {
     compactTransitionTimerRef.current = window.setTimeout(() => {
       compactTransitionTimerRef.current = null;
       void invoke('move_overlay_to_compact_top_center').then(() => {
+        void invoke('set_ignore_mouse_events', { ignore: true });
         setCompactMode('compact');
       });
     }, 180);
