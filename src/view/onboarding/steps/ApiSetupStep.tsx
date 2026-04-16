@@ -5,10 +5,11 @@ import { CTAButton } from '../PermissionsStep';
 
 interface Props {
   onBack: () => void;
+  onComplete: () => void;
 }
 
-export function ApiSetupStep({ onBack }: Props) {
-  const [endpoint, setEndpoint] = useState('https://openrouter.ai/api/v1');
+export function ApiSetupStep({ onBack, onComplete }: Props) {
+  const [endpoint, setEndpoint] = useState('http://localhost:20128/v1');
   const [apiKey, setApiKey] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -28,9 +29,8 @@ export function ApiSetupStep({ onBack }: Props) {
 
       // Complete the onboarding process after API setup
       await invoke('finish_onboarding');
-
-      // Don't call onComplete since finish_onboarding will handle the transition
       setLoading(false);
+      onComplete();
     } catch (err) {
       setError('Failed to save configuration. Please try again.');
       setLoading(false);
@@ -108,7 +108,7 @@ export function ApiSetupStep({ onBack }: Props) {
             type="text"
             value={endpoint}
             onChange={(e) => setEndpoint(e.target.value)}
-            placeholder="https://openrouter.ai/api/v1"
+            placeholder="http://localhost:20128/v1"
             style={{
               width: '100%',
               padding: '10px 12px',

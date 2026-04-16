@@ -8,7 +8,7 @@ import thukiLogo from '../../../src-tauri/icons/128x128.png';
 const POLL_INTERVAL_MS = 500;
 
 type AccessibilityStatus = 'pending' | 'requesting' | 'granted';
-type ScreenRecordingStatus = 'idle' | 'polling' | 'granted';
+type ScreenRecordingStatus = 'idle' | 'settings-opened';
 
 /** Inline macOS-style keyboard key chip for showing hotkey symbols. */
 const KeyChip = ({ label }: { label: string }) => (
@@ -160,12 +160,10 @@ export function PermissionsStep({ onNext }: PermissionsStepProps) {
   const [screenRecordingStatus, setScreenRecordingStatus] =
     useState<ScreenRecordingStatus>('idle');
   const axPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const screenPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // Guards that prevent a new poll tick from firing while a previous invoke
   // call is still in-flight. Without these, a slow IPC response (> POLL_INTERVAL_MS)
   // could queue multiple concurrent permission checks.
   const axInFlightRef = useRef(false);
-  const screenInFlightRef = useRef(false);
   // Prevents state updates from resolving in-flight invocations after unmount.
   const mountedRef = useRef(true);
 
@@ -173,13 +171,6 @@ export function PermissionsStep({ onNext }: PermissionsStepProps) {
     if (axPollRef.current !== null) {
       clearInterval(axPollRef.current);
       axPollRef.current = null;
-    }
-  }, []);
-
-  const stopScreenPolling = useCallback(() => {
-    if (screenPollRef.current !== null) {
-      clearInterval(screenPollRef.current);
-      screenPollRef.current = null;
     }
   }, []);
 
@@ -197,9 +188,8 @@ export function PermissionsStep({ onNext }: PermissionsStepProps) {
     return () => {
       mountedRef.current = false;
       stopAxPolling();
-      stopScreenPolling();
     };
-  }, [stopAxPolling, stopScreenPolling]);
+  }, [stopAxPolling]);
 
   const handleGrantAccessibility = useCallback(async () => {
     setAccessibilityStatus('requesting');
@@ -227,24 +217,8 @@ export function PermissionsStep({ onNext }: PermissionsStepProps) {
     await invoke('request_screen_recording_access');
     await invoke('open_screen_recording_settings');
     if (!mountedRef.current) return;
-    setScreenRecordingStatus('polling');
-    screenPollRef.current = setInterval(async () => {
-      if (screenInFlightRef.current) return;
-      screenInFlightRef.current = true;
-      try {
-        const granted = await invoke<boolean>(
-          'check_screen_recording_tcc_granted',
-        );
-        if (!mountedRef.current) return;
-        if (granted) {
-          stopScreenPolling();
-          setScreenRecordingStatus('granted');
-        }
-      } finally {
-        screenInFlightRef.current = false;
-      }
-    }, POLL_INTERVAL_MS);
-  }, [stopScreenPolling]);
+    setScreenRecordingStatus('settings-opened');
+  }, []);
 
   const handleQuitAndRelaunch = useCallback(async () => {
     await invoke('quit_and_relaunch');
@@ -252,8 +226,8 @@ export function PermissionsStep({ onNext }: PermissionsStepProps) {
 
   const accessibilityGranted = accessibilityStatus === 'granted';
   const isAxRequesting = accessibilityStatus === 'requesting';
-  const isScreenPolling = screenRecordingStatus === 'polling';
-  const screenGranted = screenRecordingStatus === 'granted';
+  const hasOpenedScreenRecordingSettings =
+    screenRecordingStatus === 'settings-opened';
 
   return (
     // Transparent outer container so the rounded panel corners show through
@@ -387,7 +361,10 @@ export function PermissionsStep({ onNext }: PermissionsStepProps) {
           </StepCard>
 
           {/* Step 2: Screen Recording */}
-          <StepCard active={accessibilityGranted} done={screenGranted}>
+          <StepCard
+            active={accessibilityGranted}
+            done={hasOpenedScreenRecordingSettings}
+          >
             <div
               style={{
                 width: 36,
@@ -425,46 +402,43 @@ export function PermissionsStep({ onNext }: PermissionsStepProps) {
 
         {/* Step 1 CTA: Grant Accessibility */}
         {!accessibilityGranted && (
-          <CTAButton
-            onClick={handleGrantAccessibility}
-            disabled={isAxRequesting}
-            aria-label={
-              isAxRequesting ? 'Checking...' : 'Grant Accessibility Access'
-            }
-            loading={isAxRequesting}
-          >
-            {isAxRequesting ? 'Checking...' : 'Grant Accessibility Access'}
-          </CTAButton>
-        )}
-
-        {/* Step 2 CTAs: Open Settings (with polling) + Quit & Reopen */}
-        {accessibilityGranted && (
           <>
-            {!screenGranted && (
-              <CTAButton
-                onClick={handleOpenScreenRecording}
-                disabled={isScreenPolling}
-                aria-label={
-                  isScreenPolling
-                    ? 'Checking...'
-                    : 'Open Screen Recording Settings'
-                }
-                loading={isScreenPolling}
-              >
-                {isScreenPolling
-                  ? 'Checking...'
-                  : 'Open Screen Recording Settings'}
+            <CTAButton
+              onClick={handleGrantAccessibility}
+              disabled={isAxRequesting}
+              aria-label={
+                isAxRequesting ? 'Checking...' : 'Grant Accessibility Access'
+              }
+              loading={isAxRequesting}
+            >
+              {isAxRequesting ? 'Checking...' : 'Grant Accessibility Access'}
+            </CTAButton>
+            {isAxRequesting && onNext && (
+              <CTAButton onClick={onNext} aria-label="Continue" secondary>
+                Continue
               </CTAButton>
             )}
-            {screenGranted && (
+          </>
+        )}
+
+        {/* Step 2 CTAs: Open Settings, then explicitly relaunch */}
+        {accessibilityGranted && (
+          <>
+            {!hasOpenedScreenRecordingSettings && (
+              <CTAButton
+                onClick={handleOpenScreenRecording}
+                aria-label="Open Screen Recording Settings"
+              >
+                Open Screen Recording Settings
+              </CTAButton>
+            )}
+            {hasOpenedScreenRecordingSettings && (
               <>
                 <CTAButton
-                  onClick={onNext ? onNext : handleQuitAndRelaunch}
-                  aria-label={
-                    onNext ? 'Continue to API Setup' : 'Quit and Reopen Thuki'
-                  }
+                  onClick={handleQuitAndRelaunch}
+                  aria-label="Quit and Reopen Thuki"
                 >
-                  {onNext ? 'Continue' : 'Quit & Reopen Thuki'}
+                  Quit & Reopen Thuki
                 </CTAButton>
                 <p
                   style={{
@@ -475,9 +449,8 @@ export function PermissionsStep({ onNext }: PermissionsStepProps) {
                     margin: 0,
                   }}
                 >
-                  {onNext
-                    ? 'Continue to API setup'
-                    : 'macOS requires a restart for Screen Recording to take effect'}
+                  Enable Screen Recording in System Settings, then quit and
+                  reopen Thuki to continue to API setup.
                 </p>
               </>
             )}

@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+
 import { IntroStep } from './IntroStep';
 import { PermissionsStep } from './PermissionsStep';
 import { ApiSetupStep } from './steps/ApiSetupStep';
@@ -33,7 +34,12 @@ export function OnboardingView({ stage, onComplete }: Props) {
   }
 
   if (currentStage === 'api-setup') {
-    return <ApiSetupStep onBack={() => setCurrentStage('permissions')} />;
+    return (
+      <ApiSetupStep
+        onBack={() => setCurrentStage('permissions')}
+        onComplete={onComplete}
+      />
+    );
   }
 
   return <PermissionsStep onNext={() => setCurrentStage('api-setup')} />;

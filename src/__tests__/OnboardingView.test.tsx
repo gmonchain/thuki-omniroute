@@ -87,6 +87,28 @@ describe('OnboardingView', () => {
     expect(btn).toBeDisabled();
   });
 
+  it('shows fallback continue button while accessibility is checking', async () => {
+    const onNext = vi.fn();
+    setupPermissions(false);
+    render(<PermissionsStep onNext={onNext} />);
+    await act(async () => {});
+
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole('button', { name: /grant accessibility/i }),
+      );
+    });
+
+    const btn = screen.getByRole('button', { name: /^continue$/i });
+    expect(btn).toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(btn);
+    });
+
+    expect(onNext).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps polling when accessibility not yet granted on first poll interval', async () => {
     let accessibilityGranted = false;
     invoke.mockImplementation(async (cmd: string) => {
@@ -199,7 +221,7 @@ describe('OnboardingView', () => {
     expect(invoke).toHaveBeenCalledWith('open_screen_recording_settings');
   });
 
-  it('shows spinner while polling after opening screen recording settings', async () => {
+  it('shows quit and reopen immediately after opening screen recording settings', async () => {
     setupPermissions(true);
     render(<PermissionsStep />);
     await act(async () => {});
@@ -210,101 +232,16 @@ describe('OnboardingView', () => {
       );
     });
 
-    // Button should be disabled/spinner state while polling for tcc grant
-    const btn = screen.getByRole('button', {
-      name: /checking|open screen recording settings/i,
-    });
-    expect(btn).toBeDisabled();
-  });
-
-  it('does not show quit and reopen immediately after clicking screen recording button', async () => {
-    setupPermissions(true);
-    render(<PermissionsStep />);
-    await act(async () => {});
-
-    await act(async () => {
-      fireEvent.click(
-        screen.getByRole('button', { name: /open screen recording settings/i }),
-      );
-    });
-
-    // Should NOT show quit & reopen until tcc grant is detected
-    expect(screen.queryByRole('button', { name: /quit.*reopen/i })).toBeNull();
-  });
-
-  it('keeps polling when screen recording tcc not yet granted', async () => {
-    let tccGranted = false;
-    invoke.mockImplementation(async (cmd: string) => {
-      if (cmd === 'check_accessibility_permission') return true;
-      if (cmd === 'check_screen_recording_permission') return false;
-      if (cmd === 'request_screen_recording_access') return;
-      if (cmd === 'open_screen_recording_settings') return;
-      if (cmd === 'check_screen_recording_tcc_granted') return tccGranted;
-    });
-
-    render(<PermissionsStep />);
-    await act(async () => {});
-
-    await act(async () => {
-      fireEvent.click(
-        screen.getByRole('button', { name: /open screen recording settings/i }),
-      );
-    });
-
-    // First poll: still not granted
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(500);
-    });
-
-    expect(screen.queryByRole('button', { name: /quit.*reopen/i })).toBeNull();
-
-    // Grant it
-    tccGranted = true;
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(500);
-    });
-
     expect(
       screen.getByRole('button', { name: /quit.*reopen/i }),
     ).toBeInTheDocument();
-  });
-
-  it('shows quit and reopen after screen recording tcc grant is detected', async () => {
-    invoke.mockImplementation(async (cmd: string) => {
-      if (cmd === 'check_accessibility_permission') return true;
-      if (cmd === 'check_screen_recording_permission') return false;
-      if (cmd === 'request_screen_recording_access') return;
-      if (cmd === 'open_screen_recording_settings') return;
-      if (cmd === 'check_screen_recording_tcc_granted') return true;
-    });
-
-    render(<PermissionsStep />);
-    await act(async () => {});
-
-    await act(async () => {
-      fireEvent.click(
-        screen.getByRole('button', { name: /open screen recording settings/i }),
-      );
-    });
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(500);
-    });
-
     expect(
-      screen.getByRole('button', { name: /quit.*reopen/i }),
-    ).toBeInTheDocument();
+      screen.queryByRole('button', { name: /open screen recording settings/i }),
+    ).toBeNull();
   });
 
   it('clicking quit and reopen invokes quit_and_relaunch', async () => {
-    invoke.mockImplementation(async (cmd: string) => {
-      if (cmd === 'check_accessibility_permission') return true;
-      if (cmd === 'check_screen_recording_permission') return false;
-      if (cmd === 'request_screen_recording_access') return;
-      if (cmd === 'open_screen_recording_settings') return;
-      if (cmd === 'check_screen_recording_tcc_granted') return true;
-    });
-
+    setupPermissions(true);
     render(<PermissionsStep />);
     await act(async () => {});
 
@@ -312,10 +249,6 @@ describe('OnboardingView', () => {
       fireEvent.click(
         screen.getByRole('button', { name: /open screen recording settings/i }),
       );
-    });
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(500);
     });
 
     await act(async () => {
@@ -366,17 +299,10 @@ describe('OnboardingView', () => {
     errorSpy.mockRestore();
   });
 
-  it('does not emit console.error when unmounted during screen recording polling', async () => {
+  it('does not emit console.error when unmounted after opening screen recording settings', async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    invoke.mockImplementation(async (cmd: string) => {
-      if (cmd === 'check_accessibility_permission') return true;
-      if (cmd === 'check_screen_recording_permission') return false;
-      if (cmd === 'request_screen_recording_access') return;
-      if (cmd === 'open_screen_recording_settings') return;
-      if (cmd === 'check_screen_recording_tcc_granted') return false;
-    });
-
+    setupPermissions(true);
     const { unmount } = render(<PermissionsStep />);
     await act(async () => {});
 
@@ -388,9 +314,7 @@ describe('OnboardingView', () => {
 
     act(() => unmount());
 
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(1000);
-    });
+    await act(async () => {});
 
     expect(errorSpy).not.toHaveBeenCalled();
     errorSpy.mockRestore();
@@ -556,8 +480,6 @@ describe('OnboardingView', () => {
         return new Promise((r) => {
           resolveOpen = r;
         }); // hangs
-      if (cmd === 'check_screen_recording_tcc_granted')
-        return Promise.resolve(false);
       return Promise.resolve();
     });
 
@@ -576,27 +498,21 @@ describe('OnboardingView', () => {
     act(() => unmount()); // mountedRef → false
 
     await act(async () => {
-      resolveOpen(); // mountedRef guard at line 225 fires; returns early
+      resolveOpen(); // mountedRef guard returns early
     });
 
     expect(errorSpy).not.toHaveBeenCalled();
     errorSpy.mockRestore();
   });
 
-  it('screen in-flight guard prevents concurrent tcc checks', async () => {
-    let tccCallCount = 0;
-    let resolveFirstPoll!: (v: boolean) => void;
+  it('does not poll tcc after opening screen recording settings', async () => {
     invoke.mockImplementation((cmd: string) => {
       if (cmd === 'check_accessibility_permission')
         return Promise.resolve(true);
       if (cmd === 'request_screen_recording_access') return Promise.resolve();
       if (cmd === 'open_screen_recording_settings') return Promise.resolve();
-      if (cmd === 'check_screen_recording_tcc_granted') {
-        tccCallCount++;
-        return new Promise((r) => {
-          resolveFirstPoll = r;
-        });
-      }
+      if (cmd === 'check_screen_recording_tcc_granted')
+        return Promise.resolve(true);
       return Promise.resolve();
     });
 
@@ -610,50 +526,11 @@ describe('OnboardingView', () => {
     });
 
     act(() => {
-      vi.advanceTimersByTime(500); // first tick: in-flight
-      vi.advanceTimersByTime(500); // second tick: guard blocks it
+      vi.advanceTimersByTime(1000);
     });
 
-    expect(tccCallCount).toBe(1);
-
-    await act(async () => {
-      resolveFirstPoll(false);
-    });
-  });
-
-  it('ignores screen poll result when component unmounts during in-flight tcc check', async () => {
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    let resolvePoll!: (v: boolean) => void;
-    invoke.mockImplementation((cmd: string) => {
-      if (cmd === 'check_accessibility_permission')
-        return Promise.resolve(true);
-      if (cmd === 'request_screen_recording_access') return Promise.resolve();
-      if (cmd === 'open_screen_recording_settings') return Promise.resolve();
-      if (cmd === 'check_screen_recording_tcc_granted')
-        return new Promise((r) => {
-          resolvePoll = r;
-        });
-      return Promise.resolve();
-    });
-
-    const { unmount } = render(<PermissionsStep />);
-    await act(async () => {});
-
-    await act(async () => {
-      fireEvent.click(
-        screen.getByRole('button', { name: /open screen recording settings/i }),
-      );
-    });
-
-    act(() => vi.advanceTimersByTime(500)); // poll fires, invoke hangs
-
-    act(() => unmount()); // clears interval; in-flight promise still alive
-
-    await act(async () => {
-      resolvePoll(true); // mountedRef guard at line 234 fires; returns early
-    });
-
-    expect(errorSpy).not.toHaveBeenCalled();
-    errorSpy.mockRestore();
+    expect(invoke).not.toHaveBeenCalledWith(
+      'check_screen_recording_tcc_granted',
+    );
   });
 });

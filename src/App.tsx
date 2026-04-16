@@ -15,6 +15,7 @@ import { useAiChat } from './hooks/useAiChat';
 import type { Message } from './hooks/useAiChat';
 import { useConversationHistory } from './hooks/useConversationHistory';
 import { ConversationView } from './view/ConversationView';
+import { CompactConversationPill } from './view/compact/CompactConversationPill';
 import { AskBarView, MAX_IMAGES } from './view/AskBarView';
 import { OnboardingView } from './view/onboarding/index';
 import type { OnboardingStage } from './view/onboarding/index';
@@ -35,6 +36,7 @@ const DEFAULT_MODEL_FALLBACK = 'gemma4:e2b';
 
 const OVERLAY_VISIBILITY_EVENT = 'thuki://visibility';
 const ONBOARDING_EVENT = 'thuki://onboarding';
+const OVERLAY_COMPACT_TOGGLE_EVENT = 'thuki://compact-toggle';
 
 /**
  * Authoritative deadline from the start of the hide transition to the native
@@ -105,6 +107,10 @@ function App() {
   /** Non-null when the backend signals onboarding is needed; holds the current stage. */
   const [onboardingStage, setOnboardingStage] =
     useState<OnboardingStage | null>(null);
+  /** Full conversation, a collapsing handoff state, or the compact top-center pill shown beneath the notch. */
+  const [compactMode, setCompactMode] = useState<
+    'expanded' | 'collapsing' | 'compact'
+  >('expanded');
 
   /**
    * Whether the ask-bar history panel is currently open.
@@ -231,6 +237,8 @@ function App() {
    * to chat-window mode are animated via Framer Motion `layout` prop.
    */
   const isChatMode = messages.length > 0 || isGenerating || isSubmitPending;
+  const isCompactMode = compactMode === 'compact';
+  const isCollapsingToCompact = compactMode === 'collapsing';
   const previousIsChatModeRef = useRef(isChatMode);
 
   /**
@@ -257,6 +265,27 @@ function App() {
    * The bottom stays pinned while the top edge moves up as content grows.
    */
   const windowPosRef = useRef({ x: 0, bottomY: 0 });
+  /**
+   * Restores the previous expanded conversation window frame after the compact
+   * top-center pill is dismissed.
+   */
+  const preCompactWindowFrameRef = useRef<{
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  } | null>(null);
+  /** Timer coordinating the two-step compact transition:
+   * conversation fades/shrinks first, then the native window moves and the
+   * pill fades in on the next stage. */
+  const compactTransitionTimerRef = useRef<ReturnType<
+    typeof window.setTimeout
+  > | null>(null);
+  /** Stable callback holder so event listeners can invoke compact toggle logic
+   * even though the actual callback is declared later in the component body. */
+  const handleToggleCompactModeRef = useRef<() => Promise<void> | void>(
+    () => undefined,
+  );
 
   /**
    * Mirror of `isGenerating` as a ref so the ResizeObserver closure can
@@ -388,6 +417,12 @@ function App() {
       setIsSubmitPending(false);
       setPendingUserMessage(null);
       setCaptureError(null);
+      if (compactTransitionTimerRef.current !== null) {
+        window.clearTimeout(compactTransitionTimerRef.current);
+        compactTransitionTimerRef.current = null;
+      }
+      setCompactMode('expanded');
+      preCompactWindowFrameRef.current = null;
 
       reset();
       resetHistory();
@@ -408,6 +443,12 @@ function App() {
     screenCaptureInputSnapshotRef.current = null;
     setSelectedContext(null);
     setPreviewImageUrl(null);
+    if (compactTransitionTimerRef.current !== null) {
+      window.clearTimeout(compactTransitionTimerRef.current);
+      compactTransitionTimerRef.current = null;
+    }
+    setCompactMode('expanded');
+    preCompactWindowFrameRef.current = null;
     setAttachedImages((prev) => {
       for (const img of prev) URL.revokeObjectURL(img.blobUrl);
       return [];
@@ -1325,6 +1366,7 @@ function App() {
   useEffect(() => {
     let unlistenVisibility: (() => void) | undefined;
     let unlistenOnboarding: (() => void) | undefined;
+    let unlistenCompactToggle: (() => void) | undefined;
 
     const attachListeners = async () => {
       unlistenVisibility = await listen<OverlayVisibilityPayload>(
@@ -1348,6 +1390,12 @@ function App() {
           setOnboardingStage(payload.stage);
         },
       );
+      unlistenCompactToggle = await listen<{ state: 'toggle' }>(
+        OVERLAY_COMPACT_TOGGLE_EVENT,
+        () => {
+          void handleToggleCompactModeRef.current();
+        },
+      );
       // Both listeners registered — safe to let Rust decide what to show on launch.
       await invoke('notify_frontend_ready');
     };
@@ -1356,6 +1404,7 @@ function App() {
     return () => {
       unlistenVisibility?.();
       unlistenOnboarding?.();
+      unlistenCompactToggle?.();
     };
   }, [replayEntranceAnimation, requestHideOverlay]);
 
@@ -1369,6 +1418,103 @@ function App() {
     requestHideOverlay();
   }, [requestHideOverlay]);
 
+  const handleExpandConversation = useCallback(async () => {
+    if (compactTransitionTimerRef.current !== null) {
+      window.clearTimeout(compactTransitionTimerRef.current);
+      compactTransitionTimerRef.current = null;
+    }
+
+    setCompactMode('expanded');
+    const previousFrame = preCompactWindowFrameRef.current;
+    if (!previousFrame) return;
+
+    growsUpwardRef.current = false;
+    setGrowsUpward(false);
+    await invoke('set_window_frame', previousFrame);
+  }, []);
+
+  const handleToggleCompactMode = useCallback(async () => {
+    if (
+      overlayState !== 'visible' ||
+      !isChatMode ||
+      compactMode === 'collapsing'
+    )
+      return;
+
+    if (compactMode === 'compact') {
+      await handleExpandConversation();
+      return;
+    }
+
+    const windowHandle = getCurrentWindow() as {
+      outerPosition?: () => Promise<{
+        x: number;
+        y: number;
+        toLogical?: (scaleFactor: number) => { x: number; y: number };
+      }>;
+      outerSize?: () => Promise<{
+        width: number;
+        height: number;
+        toLogical?: (scaleFactor: number) => { width: number; height: number };
+      }>;
+      scaleFactor?: () => Promise<number>;
+    };
+
+    if (
+      windowHandle.outerPosition &&
+      windowHandle.outerSize &&
+      windowHandle.scaleFactor
+    ) {
+      try {
+        const [position, size, scaleFactor] = await Promise.all([
+          windowHandle.outerPosition(),
+          windowHandle.outerSize(),
+          windowHandle.scaleFactor(),
+        ]);
+
+        const logicalPosition = position.toLogical
+          ? position.toLogical(scaleFactor)
+          : position;
+        const logicalSize = size.toLogical ? size.toLogical(scaleFactor) : size;
+
+        preCompactWindowFrameRef.current = {
+          x: logicalPosition.x,
+          y: logicalPosition.y,
+          width: logicalSize.width,
+          height: logicalSize.height,
+        };
+      } catch {
+        preCompactWindowFrameRef.current = null;
+      }
+    }
+
+    setIsHistoryOpen(false);
+    growsUpwardRef.current = false;
+    setGrowsUpward(false);
+    setCompactMode('collapsing');
+
+    if (compactTransitionTimerRef.current !== null) {
+      window.clearTimeout(compactTransitionTimerRef.current);
+    }
+
+    compactTransitionTimerRef.current = window.setTimeout(() => {
+      compactTransitionTimerRef.current = null;
+      void invoke('move_overlay_to_compact_top_center').then(() => {
+        setCompactMode('compact');
+      });
+    }, 180);
+  }, [compactMode, handleExpandConversation, isChatMode, overlayState]);
+
+  useEffect(() => {
+    return () => {
+      if (compactTransitionTimerRef.current !== null) {
+        window.clearTimeout(compactTransitionTimerRef.current);
+      }
+    };
+  }, []);
+
+  handleToggleCompactModeRef.current = handleToggleCompactMode;
+
   /** Hide window on Escape or Cmd+W (macOS) / Ctrl+W. */
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -1381,13 +1527,13 @@ function App() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [handleCloseOverlay]);
 
-  /** Programmatic focus when the overlay becomes visible. */
+  /** Programmatic focus when the expanded overlay becomes visible. */
   useEffect(() => {
-    if (overlayState === 'visible') {
+    if (overlayState === 'visible' && compactMode === 'expanded') {
       const raf = requestAnimationFrame(() => inputRef.current?.focus());
       return () => cancelAnimationFrame(raf);
     }
-  }, [overlayState]);
+  }, [compactMode, overlayState]);
 
   /**
    * Commits the native window hide after a fixed deadline from the start of
@@ -1472,176 +1618,212 @@ function App() {
     // Minimal padding (pt-2 pb-6) provides just enough physical clearance for the
     // tightened drop shadow to render without clipping at the native window edge.
     <div
-      onMouseDown={handleDragStart}
-      onDragOver={handleRootDragOver}
-      onDragLeave={handleRootDragLeave}
-      onDrop={handleRootDrop}
-      className={`flex flex-col items-center ${growsUpward ? 'justify-end' : 'justify-start'} h-screen w-screen px-3 py-4 bg-transparent overflow-visible`}
+      onMouseDown={
+        isCompactMode || isCollapsingToCompact ? undefined : handleDragStart
+      }
+      onDragOver={
+        isCompactMode || isCollapsingToCompact ? undefined : handleRootDragOver
+      }
+      onDragLeave={
+        isCompactMode || isCollapsingToCompact ? undefined : handleRootDragLeave
+      }
+      onDrop={
+        isCompactMode || isCollapsingToCompact ? undefined : handleRootDrop
+      }
+      className={`flex flex-col items-center ${
+        growsUpward && !isCompactMode && !isCollapsingToCompact
+          ? 'justify-end px-3 py-4'
+          : isCompactMode || isCollapsingToCompact
+            ? 'justify-start px-0 py-0'
+            : 'justify-start px-3 py-4'
+      } w-screen bg-transparent overflow-visible`}
+      style={
+        isCompactMode || isCollapsingToCompact
+          ? { height: 48, pointerEvents: 'none' }
+          : { height: '100vh' }
+      }
     >
-      <AnimatePresence mode="wait">
+      <AnimatePresence mode="wait" initial={false}>
         {shouldRenderOverlay ? (
-          <motion.div
-            key={`overlay-${sessionId}`}
-            initial={{ opacity: 0, y: -20, scale: 0.96 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -16, scale: 0.98 }}
-            transition={{ type: 'spring', stiffness: 260, damping: 24 }}
-            className="w-full max-w-2xl px-4 py-2 overflow-visible"
-          >
-            {/* Relative wrapper — serves as the positioning context for the
-                chat-mode history dropdown so it can sit outside the morphing
-                container's overflow-hidden boundary without being clipped. */}
-            <div className="relative">
-              {/* Morphing Container — flex column ensures the input bar
-                  always sticks to the bottom without spring animation lag.
-                  A CSS `transition: min-height` drives smooth window growth
-                  when the chat-mode history dropdown is open; the existing
-                  ResizeObserver fires per-frame and calls setSize() so the
-                  native window tracks the animation. The dropdown is a sibling
-                  (not a child) so overflow-hidden never clips it. */}
-              <div
-                ref={setContainerRef}
-                style={{
-                  transition:
-                    'height 0.25s cubic-bezier(0.16, 1, 0.3, 1), min-height 0.25s cubic-bezier(0.16, 1, 0.3, 1)',
-                }}
-                className={`morphing-container relative flex flex-col bg-surface-base backdrop-blur-2xl border border-surface-border max-h-[600px] overflow-hidden ${
-                  isChatMode
-                    ? `rounded-lg shadow-chat`
-                    : 'rounded-2xl shadow-bar'
-                }`}
-              >
-                {/* Chat Messages Area — morphs in when in chat mode */}
-                <AnimatePresence>
-                  {isChatMode ? (
-                    <ConversationView
-                      messages={
-                        pendingUserMessage
-                          ? [...messages, pendingUserMessage]
-                          : messages
-                      }
-                      isGenerating={isGenerating || isSubmitPending}
-                      onClose={handleCloseOverlay}
-                      onSave={handleSave}
-                      isSaved={isSaved}
-                      canSave={canSave}
-                      onNewConversation={handleNewConversation}
-                      onHistoryOpen={handleHistoryToggle}
-                      onImagePreview={handleChatImagePreview}
-                    />
-                  ) : null}
-                </AnimatePresence>
-
-                {/* Ask-bar mode history panel — inline below the input bar.
-                    The !isChatMode gate lives OUTSIDE AnimatePresence so that when
-                    a conversation is loaded (isChatMode → true) the panel unmounts
-                    instantly — no exit animation runs alongside ConversationView
-                    mounting. Without this, AnimatePresence would hold the panel in
-                    the DOM during its exit while ConversationView is also present,
-                    causing two rapid ResizeObserver → setSize() calls (jitter).
-                    AnimatePresence is still used for the manual toggle (isHistoryOpen)
-                    so the drawer height-animates smoothly open and closed. */}
-                {!isChatMode && (
+          isCompactMode || isCollapsingToCompact ? (
+            <CompactConversationPill
+              key={`compact-${sessionId}`}
+              messages={
+                pendingUserMessage
+                  ? [...messages, pendingUserMessage]
+                  : messages
+              }
+              isGenerating={isGenerating || isSubmitPending}
+            />
+          ) : (
+            <motion.div
+              key={`overlay-${sessionId}`}
+              layout
+              initial={{ opacity: 0, y: -8, scale: 0.988 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -6, scale: 0.992 }}
+              transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+              className="w-full max-w-2xl px-4 py-2 overflow-visible"
+            >
+              {/* Relative wrapper — serves as the positioning context for the
+                  chat-mode history dropdown so it can sit outside the morphing
+                  container's overflow-hidden boundary without being clipped. */}
+              <div className="relative">
+                {/* Morphing Container — flex column ensures the input bar
+                    always sticks to the bottom without spring animation lag.
+                    A CSS `transition: min-height` drives smooth window growth
+                    when the chat-mode history dropdown is open; the existing
+                    ResizeObserver fires per-frame and calls setSize() so the
+                    native window tracks the animation. The dropdown is a sibling
+                    (not a child) so overflow-hidden never clips it. */}
+                <div
+                  ref={setContainerRef}
+                  style={{
+                    transition:
+                      'height 0.25s cubic-bezier(0.16, 1, 0.3, 1), min-height 0.25s cubic-bezier(0.16, 1, 0.3, 1)',
+                  }}
+                  className={`morphing-container relative flex flex-col bg-surface-base backdrop-blur-2xl border border-surface-border max-h-[600px] overflow-hidden ${
+                    isChatMode
+                      ? `rounded-lg shadow-chat`
+                      : 'rounded-2xl shadow-bar'
+                  }`}
+                >
+                  {/* Chat Messages Area — morphs in when in chat mode */}
                   <AnimatePresence>
-                    {isHistoryOpen ? (
-                      <motion.div
-                        key="ask-bar-history"
-                        initial={{ height: 0, opacity: 0 }}
-                        animate={{ height: 'auto', opacity: 1 }}
-                        exit={{ height: 0, opacity: 0 }}
-                        transition={{
-                          height: {
-                            duration: 0.3,
-                            ease: [0.33, 1, 0.68, 1],
-                          },
-                          opacity: { duration: 0.2, delay: 0.08 },
-                        }}
-                        style={{ overflow: 'hidden' }}
-                        className="border-t border-surface-border"
-                      >
-                        <HistoryPanel
-                          listConversations={listConversations}
-                          onLoadConversation={handleLoadConversation}
-                          onSaveAndLoad={handleSaveAndLoad}
-                          onDeleteConversation={handleDeleteConversation}
-                          hasCurrentMessages={false}
-                          showNewConversation={false}
-                          currentConversationId={conversationId}
-                        />
-                      </motion.div>
+                    {isChatMode ? (
+                      <ConversationView
+                        messages={
+                          pendingUserMessage
+                            ? [...messages, pendingUserMessage]
+                            : messages
+                        }
+                        isGenerating={isGenerating || isSubmitPending}
+                        onClose={handleCloseOverlay}
+                        onSave={handleSave}
+                        isSaved={isSaved}
+                        canSave={canSave}
+                        onNewConversation={handleNewConversation}
+                        onHistoryOpen={handleHistoryToggle}
+                        onImagePreview={handleChatImagePreview}
+                      />
                     ) : null}
                   </AnimatePresence>
-                )}
 
-                {/* Capture error banner: shown when /screen capture fails so
-                    the user knows why the message was not sent. */}
-                {captureError && (
-                  <div className="px-4 py-2 border-t border-red-900/30">
-                    <p className="text-red-400 text-xs leading-relaxed">
-                      {captureError}
-                    </p>
-                  </div>
-                )}
+                  {/* Ask-bar mode history panel — inline below the input bar.
+                      The !isChatMode gate lives OUTSIDE AnimatePresence so that when
+                      a conversation is loaded (isChatMode → true) the panel unmounts
+                      instantly — no exit animation runs alongside ConversationView
+                      mounting. Without this, AnimatePresence would hold the panel in
+                      the DOM during its exit while ConversationView is also present,
+                      causing two rapid ResizeObserver → setSize() calls (jitter).
+                      AnimatePresence is still used for the manual toggle (isHistoryOpen)
+                      so the drawer height-animates smoothly open and closed. */}
+                  {!isChatMode && (
+                    <AnimatePresence>
+                      {isHistoryOpen ? (
+                        <motion.div
+                          key="ask-bar-history"
+                          initial={{ height: 0, opacity: 0 }}
+                          animate={{ height: 'auto', opacity: 1 }}
+                          exit={{ height: 0, opacity: 0 }}
+                          transition={{
+                            height: {
+                              duration: 0.3,
+                              ease: [0.33, 1, 0.68, 1],
+                            },
+                            opacity: { duration: 0.2, delay: 0.08 },
+                          }}
+                          style={{ overflow: 'hidden' }}
+                          className="border-t border-surface-border"
+                        >
+                          <HistoryPanel
+                            listConversations={listConversations}
+                            onLoadConversation={handleLoadConversation}
+                            onSaveAndLoad={handleSaveAndLoad}
+                            onDeleteConversation={handleDeleteConversation}
+                            hasCurrentMessages={false}
+                            showNewConversation={false}
+                            currentConversationId={conversationId}
+                          />
+                        </motion.div>
+                      ) : null}
+                    </AnimatePresence>
+                  )}
 
-                {/* Input Bar — always pinned to the bottom */}
-                <AskBarView
-                  query={query}
-                  setQuery={setQuery}
-                  isChatMode={isChatMode}
-                  isGenerating={isGenerating}
-                  isSubmitPending={isSubmitPending}
-                  onSubmit={handleSubmit}
-                  onCancel={handleCancel}
-                  inputRef={inputRef}
-                  selectedText={selectedContext ?? undefined}
-                  onHistoryOpen={handleHistoryToggle}
-                  attachedImages={isSubmitPending ? [] : attachedImages}
-                  onImagesAttached={handleImagesAttached}
-                  onImageRemove={handleImageRemove}
-                  onImagePreview={handleAskBarImagePreview}
-                  onScreenshot={handleScreenshot}
-                  selectedModel={modelConfig?.active}
-                  modelOptions={modelConfig?.all}
-                  onModelChange={handleModelChange}
-                  onModelDelete={handleModelDelete}
-                  isDragOver={isDragOver ?? undefined}
-                />
+                  {/* Capture error banner: shown when /screen capture fails so
+                      the user knows why the message was not sent. */}
+                  {captureError && (
+                    <div className="px-4 py-2 border-t border-red-900/30">
+                      <p className="text-red-400 text-xs leading-relaxed">
+                        {captureError}
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Input Bar — always pinned to the bottom */}
+                  <AskBarView
+                    query={query}
+                    setQuery={setQuery}
+                    isChatMode={isChatMode}
+                    isGenerating={isGenerating}
+                    isSubmitPending={isSubmitPending}
+                    onSubmit={handleSubmit}
+                    onCancel={handleCancel}
+                    inputRef={inputRef}
+                    selectedText={selectedContext ?? undefined}
+                    onHistoryOpen={handleHistoryToggle}
+                    attachedImages={isSubmitPending ? [] : attachedImages}
+                    onImagesAttached={handleImagesAttached}
+                    onImageRemove={handleImageRemove}
+                    onImagePreview={handleAskBarImagePreview}
+                    onScreenshot={handleScreenshot}
+                    selectedModel={modelConfig?.active}
+                    modelOptions={modelConfig?.all}
+                    onModelChange={handleModelChange}
+                    onModelDelete={handleModelDelete}
+                    isDragOver={isDragOver ?? undefined}
+                  />
+                </div>
+
+                {/* Chat-mode history dropdown — sibling of the morphing container so
+                    it is never clipped by its overflow-hidden. Positioned absolutely
+                    within this relative wrapper (same coordinate space as the
+                    container). The container's minHeight animation grows the native
+                    window tall enough to reveal the full dropdown. */}
+                <AnimatePresence>
+                  {isChatMode && isHistoryOpen ? (
+                    <motion.div
+                      ref={historyDropdownRef}
+                      key="chat-history"
+                      initial={{ opacity: 0, y: -8, scale: 0.97 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      exit={{ opacity: 0, y: -8, scale: 0.97 }}
+                      transition={{
+                        type: 'spring',
+                        stiffness: 400,
+                        damping: 30,
+                      }}
+                      className="history-dropdown absolute right-3 top-10 z-50 w-56 rounded-xl border border-surface-border bg-surface-base shadow-chat overflow-hidden flex flex-col"
+                    >
+                      <HistoryPanel
+                        listConversations={listConversations}
+                        onLoadConversation={handleLoadConversation}
+                        onSaveAndLoad={handleSaveAndLoad}
+                        onDeleteConversation={handleDeleteConversation}
+                        hasCurrentMessages={messages.length > 0 && !isSaved}
+                        currentConversationId={conversationId}
+                        showNewConversation={false}
+                        pendingNewConversation={pendingNewConversation}
+                        onSaveAndNew={handleSaveAndNew}
+                        onJustNew={handleJustNew}
+                        onCancelNew={() => setIsHistoryOpen(false)}
+                      />
+                    </motion.div>
+                  ) : null}
+                </AnimatePresence>
               </div>
-
-              {/* Chat-mode history dropdown — sibling of the morphing container so
-                  it is never clipped by its overflow-hidden. Positioned absolutely
-                  within this relative wrapper (same coordinate space as the
-                  container). The container's minHeight animation grows the native
-                  window tall enough to reveal the full dropdown. */}
-              <AnimatePresence>
-                {isChatMode && isHistoryOpen ? (
-                  <motion.div
-                    ref={historyDropdownRef}
-                    key="chat-history"
-                    initial={{ opacity: 0, y: -8, scale: 0.97 }}
-                    animate={{ opacity: 1, y: 0, scale: 1 }}
-                    exit={{ opacity: 0, y: -8, scale: 0.97 }}
-                    transition={{ type: 'spring', stiffness: 400, damping: 30 }}
-                    className="history-dropdown absolute right-3 top-10 z-50 w-56 rounded-xl border border-surface-border bg-surface-base shadow-chat overflow-hidden flex flex-col"
-                  >
-                    <HistoryPanel
-                      listConversations={listConversations}
-                      onLoadConversation={handleLoadConversation}
-                      onSaveAndLoad={handleSaveAndLoad}
-                      onDeleteConversation={handleDeleteConversation}
-                      hasCurrentMessages={messages.length > 0 && !isSaved}
-                      currentConversationId={conversationId}
-                      showNewConversation={false}
-                      pendingNewConversation={pendingNewConversation}
-                      onSaveAndNew={handleSaveAndNew}
-                      onJustNew={handleJustNew}
-                      onCancelNew={() => setIsHistoryOpen(false)}
-                    />
-                  </motion.div>
-                ) : null}
-              </AnimatePresence>
-            </div>
-          </motion.div>
+            </motion.div>
+          )
         ) : null}
       </AnimatePresence>
       <ImagePreviewModal

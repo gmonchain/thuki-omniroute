@@ -78,7 +78,7 @@ The application includes a rich command system accessible via slash commands:
 ### Usage Examples
 ```
 /model gpt-4
-/endpoint https://openrouter.ai/api/v1
+/endpoint http://localhost:20128/v1
 /api-key sk-1234567890
 /think Analyze this complex problem
 ```

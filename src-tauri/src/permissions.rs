@@ -51,6 +51,44 @@ pub fn is_screen_recording_granted() -> bool {
     unsafe { CGPreflightScreenCaptureAccess() }
 }
 
+/// Returns whether Screen Recording has been recorded in TCC for this app.
+///
+/// Unlike `CGPreflightScreenCaptureAccess`, this detects the
+/// "granted but pending restart" state needed by onboarding: once the user
+/// enables the toggle in System Settings, `CGWindowListCopyWindowInfo` returns
+/// a non-null list immediately even before pixels are accessible to the
+/// current process.
+#[cfg(target_os = "macos")]
+#[cfg_attr(coverage_nightly, coverage(off))]
+pub fn is_screen_recording_tcc_granted() -> bool {
+    type CFArrayRef = *const std::ffi::c_void;
+
+    #[link(name = "ApplicationServices", kind = "framework")]
+    extern "C" {
+        fn CGWindowListCopyWindowInfo(option: u32, relativeToWindow: u32) -> CFArrayRef;
+    }
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        fn CFRelease(cf: *const std::ffi::c_void);
+    }
+
+    const K_CG_NULL_WINDOW_ID: u32 = 0;
+    const K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY: u32 = 1 << 0;
+    const K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS: u32 = 1 << 4;
+
+    let option = K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY | K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS;
+
+    unsafe {
+        let probe = CGWindowListCopyWindowInfo(option, K_CG_NULL_WINDOW_ID);
+        if probe.is_null() {
+            return false;
+        }
+        CFRelease(probe);
+        true
+    }
+}
+
 // ─── Tauri Commands ──────────────────────────────────────────────────────────
 
 /// Returns whether Accessibility permission has been granted.
@@ -124,18 +162,17 @@ pub fn request_screen_recording_access() {
     }
 }
 
-/// Returns `true` if Screen & System Audio Recording permission is currently
-/// granted. Delegates to `CGPreflightScreenCaptureAccess`, which correctly
-/// returns `false` when the permission has not been granted, fixing the
-/// historical false-positive from `CGWindowListCopyWindowInfo(0, 0)`.
+/// Returns `true` once Screen Recording has been recorded in TCC for this app.
 ///
-/// Called by PermissionsStep during onboarding polling so the "Quit & Reopen"
-/// prompt appears once the user toggles the permission on in System Settings.
+/// Unlike `CGPreflightScreenCaptureAccess`, this intentionally treats
+/// "granted but pending restart" as granted so onboarding can stop polling and
+/// prompt the user to quit and relaunch immediately after they enable the
+/// toggle in System Settings.
 #[tauri::command]
 #[cfg(target_os = "macos")]
 #[cfg_attr(coverage_nightly, coverage(off))]
 pub fn check_screen_recording_tcc_granted() -> bool {
-    is_screen_recording_granted()
+    is_screen_recording_tcc_granted()
 }
 
 /// Quits Thuki and immediately relaunches it.

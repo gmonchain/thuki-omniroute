@@ -5,7 +5,7 @@
  * persisted value in the `app_config` table.
  *
  * Stages progress linearly:
- *   "permissions" -> "intro" -> "complete"
+ *   "permissions" -> "api-setup" -> "intro" -> "complete"
  *
  * "permissions" is the implicit default when no value has been written yet.
  * Once "complete", onboarding is never shown again regardless of permissions.
@@ -32,6 +32,7 @@ pub enum OnboardingStage {
 /// has been written yet (i.e. first-ever launch).
 pub fn get_stage(conn: &Connection) -> rusqlite::Result<OnboardingStage> {
     match get_config(conn, STAGE_KEY)?.as_deref() {
+        Some("api-setup") => Ok(OnboardingStage::ApiSetup),
         Some("intro") => Ok(OnboardingStage::Intro),
         Some("complete") => Ok(OnboardingStage::Complete),
         _ => Ok(OnboardingStage::Permissions),
@@ -100,6 +101,13 @@ mod tests {
     }
 
     #[test]
+    fn set_and_get_stage_round_trips_api_setup() {
+        let conn = open_in_memory().unwrap();
+        set_stage(&conn, &OnboardingStage::ApiSetup).unwrap();
+        assert_eq!(get_stage(&conn).unwrap(), OnboardingStage::ApiSetup);
+    }
+
+    #[test]
     fn set_and_get_stage_round_trips_intro() {
         let conn = open_in_memory().unwrap();
         set_stage(&conn, &OnboardingStage::Intro).unwrap();
@@ -151,6 +159,14 @@ mod tests {
         assert_eq!(result, Some(OnboardingStage::Permissions));
         // Stage must not have been modified.
         assert_eq!(get_stage(&conn).unwrap(), OnboardingStage::Permissions);
+    }
+
+    #[test]
+    fn compute_startup_stage_shows_api_setup_when_stage_is_api_setup() {
+        let conn = open_in_memory().unwrap();
+        set_stage(&conn, &OnboardingStage::ApiSetup).unwrap();
+        let result = compute_startup_stage(&conn).unwrap();
+        assert_eq!(result, Some(OnboardingStage::ApiSetup));
     }
 
     #[test]

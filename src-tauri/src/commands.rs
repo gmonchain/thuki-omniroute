@@ -7,7 +7,7 @@ use tauri::{ipc::Channel, State};
 use tokio_util::sync::CancellationToken;
 
 /// Default configuration constants as the application currently lacks a Settings UI.
-pub const DEFAULT_API_ENDPOINT: &str = "https://openrouter.ai/api/v1";
+pub const DEFAULT_API_ENDPOINT: &str = "http://localhost:20128/v1";
 pub const DEFAULT_MODEL_NAME: &str = "qw/qwen3-coder-plus";
 pub const DEFAULT_API_KEY: &str = "sk-3d2017a487150c52-29a4c5-8ed3c1b5";
 const API_ENDPOINT_ENV_VAR: &str = "THUKI_API_ENDPOINT";
@@ -1615,7 +1615,7 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap();
         std::env::set_var(API_ENDPOINT_ENV_VAR, "http://localhost:11434/v1");
 
-        let endpoint = resolve_runtime_endpoint("https://openrouter.ai/api/v1/chat/completions");
+        let endpoint = resolve_runtime_endpoint("http://localhost:20128/v1/chat/completions");
         assert_eq!(endpoint, "http://localhost:11434/v1/chat/completions");
 
         std::env::remove_var(API_ENDPOINT_ENV_VAR);

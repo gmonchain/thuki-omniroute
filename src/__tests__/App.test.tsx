@@ -8,7 +8,11 @@ import {
   enableChannelCaptureWithResponses,
   getLastChannel,
 } from '../testUtils/mocks/tauri';
-import { __mockWindow } from '../testUtils/mocks/tauri-window';
+import {
+  __mockWindow,
+  __resetMockWindowGeometry,
+  __setMockWindowGeometry,
+} from '../testUtils/mocks/tauri-window';
 
 async function showOverlay(selectedText: string | null = null) {
   await act(async () => {
@@ -25,6 +29,7 @@ async function showOverlay(selectedText: string | null = null) {
 describe('App', () => {
   beforeEach(() => {
     invoke.mockClear();
+    __resetMockWindowGeometry();
     enableChannelCapture();
   });
 
@@ -4338,6 +4343,101 @@ describe('App', () => {
       });
 
       expect(screen.queryByText('Before you dive in')).toBeNull();
+    });
+
+    it('collapses conversation into compact pill on compact toggle event', async () => {
+      invoke.mockResolvedValue(undefined);
+      __setMockWindowGeometry({
+        scaleFactor: 2,
+        position: { x: 120, y: 72 },
+        size: { width: 600, height: 480 },
+      });
+
+      render(<App />);
+      await act(async () => {});
+
+      await showOverlay();
+
+      const input = screen.getByPlaceholderText('Ask Thuki anything...');
+      fireEvent.change(input, { target: { value: 'Summarize this' } });
+
+      await act(async () => {
+        fireEvent.keyDown(input, {
+          key: 'Enter',
+          code: 'Enter',
+          charCode: 13,
+        });
+      });
+
+      await act(async () => {
+        emitTauriEvent('thuki://compact-toggle', { state: 'toggle' });
+      });
+
+      // Wait for compact transition timer (180ms) to complete
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      });
+
+      expect(screen.getByText('Thinking...')).toBeInTheDocument();
+      expect(screen.queryByPlaceholderText('Ask Thuki anything...')).toBeNull();
+      expect(invoke).toHaveBeenCalledWith('move_overlay_to_compact_top_center');
+    });
+
+    it('re-expands compact pill back into conversation view on second compact toggle', async () => {
+      invoke.mockResolvedValue(undefined);
+      __setMockWindowGeometry({
+        scaleFactor: 2,
+        position: { x: 120, y: 72 },
+        size: { width: 600, height: 480 },
+      });
+
+      render(<App />);
+      await act(async () => {});
+
+      await showOverlay();
+
+      const input = screen.getByPlaceholderText('Ask Thuki anything...');
+      fireEvent.change(input, { target: { value: 'Summarize this' } });
+
+      await act(async () => {
+        fireEvent.keyDown(input, {
+          key: 'Enter',
+          code: 'Enter',
+          charCode: 13,
+        });
+      });
+
+      await act(async () => {
+        emitTauriEvent('thuki://compact-toggle', { state: 'toggle' });
+      });
+
+      // Wait for compact transition timer (180ms) to complete
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      });
+
+      expect(screen.getByText('Thinking...')).toBeInTheDocument();
+
+      await act(async () => {
+        emitTauriEvent('thuki://compact-toggle', { state: 'toggle' });
+      });
+
+      // Wait for expand animation to complete
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      });
+
+      expect(screen.queryByText('Thinking...')).toBeNull();
+      expect(screen.getByPlaceholderText('Reply...')).toBeInTheDocument();
+      expect(invoke).toHaveBeenCalledWith(
+        'set_window_frame',
+        expect.objectContaining({
+          x: expect.any(Number),
+          y: expect.any(Number),
+          width: expect.any(Number),
+          height: expect.any(Number),
+        }),
+      );
     });
   });
 });

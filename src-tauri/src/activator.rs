@@ -2,8 +2,9 @@
 //!
 //! This module coordinates the interaction between system-level input events
 //! and the application's visibility state. It provides a non-intrusive monitoring
-//! layer that detects specific user intent (via a primary activation trigger)
-//! to toggle the overlay.
+//! layer that detects two distinct intents:
+//! - double-tap Control to toggle the overlay
+//! - single-tap Option to trigger compact-mode behavior
 //!
 //! The implementation uses a high-performance background listener with its own
 //! event loop, ensuring zero latency impact on the main application or the
@@ -34,9 +35,13 @@ const ACTIVATION_WINDOW: Duration = Duration::from_millis(400);
 /// Minimum interval between successive activations to prevent accidental double-toggles.
 const ACTIVATION_COOLDOWN: Duration = Duration::from_millis(600);
 
-/// Primary keycodes used for the activation sequence (macOS Control keys).
+/// Primary keycodes used for the double-tap activation sequence (macOS Control keys).
 const KC_PRIMARY_L: i64 = 0x3b;
 const KC_PRIMARY_R: i64 = 0x3e;
+
+/// Primary keycodes used for the compact toggle gesture (macOS Option keys).
+const KC_OPTION_L: i64 = 0x3a;
+const KC_OPTION_R: i64 = 0x3d;
 
 /// Maximum number of attempts to establish the event tap while waiting for system permissions.
 const MAX_PERMISSION_ATTEMPTS: u32 = 6;
@@ -82,7 +87,7 @@ fn request_authorization(prompt: bool) -> bool {
 
 // ─── Activation Logic ────────────────────────────────────────────────────────
 
-/// Internal state tracking for the activation sequence.
+/// Internal state tracking for the double-tap Control activation sequence.
 struct ActivationState {
     /// Timestamp of the last verified event in the sequence.
     last_trigger: Option<Instant>,
@@ -92,7 +97,14 @@ struct ActivationState {
     last_activation: Option<Instant>,
 }
 
-/// Evaluates a raw input event to determine if the activation sequence is complete.
+/// Internal state tracking for the single-tap Option gesture.
+struct OptionTapState {
+    /// Tracks the current physical state of the Option key.
+    is_pressed: bool,
+}
+
+/// Evaluates a raw Control-key event to determine whether it completes the
+/// existing double-tap activation sequence.
 ///
 /// Implements a state machine that filters for state transitions (press/release)
 /// and enforces temporal constraints defined by [`ACTIVATION_WINDOW`].
@@ -117,7 +129,23 @@ fn evaluate_activation(state: &mut ActivationState, is_press: bool) -> bool {
             }
         }
         state.last_trigger = Some(now);
+        return false;
     } else if !is_press {
+        state.is_pressed = false;
+    }
+
+    false
+}
+
+/// Evaluates a raw Option-key event to determine whether it represents a
+/// single-tap gesture for toggling compact mode.
+fn evaluate_option_tap(state: &mut OptionTapState, is_press: bool) -> bool {
+    if is_press && !state.is_pressed {
+        state.is_pressed = true;
+        return true;
+    }
+
+    if !is_press {
         state.is_pressed = false;
     }
 
@@ -149,10 +177,32 @@ impl OverlayActivator {
     ///
     /// * `on_activation` - A thread-safe closure executed whenever the activation
     ///   sequence is detected.
+    #[allow(dead_code)]
     #[cfg_attr(coverage_nightly, coverage(off))]
     pub fn start<F>(&self, on_activation: F)
     where
         F: Fn() + Send + Sync + 'static,
+    {
+        self.start_with_single_tap(on_activation, || {});
+    }
+
+    /// Spawns the background monitoring thread and initializes the event loop.
+    ///
+    /// Emits a callback on the first qualifying Option tap for compact-mode
+    /// behavior and a second callback when the existing double-tap Control
+    /// activation completes.
+    ///
+    /// # Arguments
+    ///
+    /// * `on_activation` - A thread-safe closure executed whenever the
+    ///   double-tap Control activation sequence is detected.
+    /// * `on_single_tap` - A thread-safe closure executed on the first
+    ///   qualifying Option tap.
+    #[cfg_attr(coverage_nightly, coverage(off))]
+    pub fn start_with_single_tap<F, G>(&self, on_activation: F, on_single_tap: G)
+    where
+        F: Fn() + Send + Sync + 'static,
+        G: Fn() + Send + Sync + 'static,
     {
         if self.is_active.load(Ordering::SeqCst) {
             return;
@@ -166,9 +216,10 @@ impl OverlayActivator {
 
         let is_active = self.is_active.clone();
         let on_activation = Arc::new(on_activation);
+        let on_single_tap = Arc::new(on_single_tap);
 
         std::thread::spawn(move || {
-            run_loop_with_retry(is_active, on_activation);
+            run_loop_with_retry(is_active, on_activation, on_single_tap);
         });
     }
 }
@@ -197,9 +248,13 @@ enum TapExitReason {
 ///   `TapDisabledByTimeout`). Retries immediately with no attempt limit so the
 ///   listener recovers as fast as possible.
 #[cfg_attr(coverage_nightly, coverage(off))]
-fn run_loop_with_retry<F>(is_active: Arc<AtomicBool>, on_activation: Arc<F>)
-where
+fn run_loop_with_retry<F, G>(
+    is_active: Arc<AtomicBool>,
+    on_activation: Arc<F>,
+    on_single_tap: Arc<G>,
+) where
     F: Fn() + Send + Sync + 'static,
+    G: Fn() + Send + Sync + 'static,
 {
     let mut permission_failures: u32 = 0;
 
@@ -208,7 +263,7 @@ where
             return;
         }
 
-        match try_initialize_tap(&is_active, &on_activation) {
+        match try_initialize_tap(&is_active, &on_activation, &on_single_tap) {
             TapExitReason::Deactivated => return,
 
             TapExitReason::TapDied => {
@@ -243,19 +298,27 @@ where
 /// Returns the reason the run loop exited so the caller can decide whether
 /// to retry.
 #[cfg_attr(coverage_nightly, coverage(off))]
-fn try_initialize_tap<F>(is_active: &Arc<AtomicBool>, on_activation: &Arc<F>) -> TapExitReason
+fn try_initialize_tap<F, G>(
+    is_active: &Arc<AtomicBool>,
+    on_activation: &Arc<F>,
+    on_single_tap: &Arc<G>,
+) -> TapExitReason
 where
     F: Fn() + Send + Sync + 'static,
+    G: Fn() + Send + Sync + 'static,
 {
-    let state = Arc::new(Mutex::new(ActivationState {
+    let activation_state = Arc::new(Mutex::new(ActivationState {
         last_trigger: None,
         is_pressed: false,
         last_activation: None,
     }));
+    let option_tap_state = Arc::new(Mutex::new(OptionTapState { is_pressed: false }));
 
     let cb_active = is_active.clone();
     let cb_on_activation = on_activation.clone();
-    let cb_state = state.clone();
+    let cb_on_single_tap = on_single_tap.clone();
+    let cb_activation_state = activation_state.clone();
+    let cb_option_tap_state = option_tap_state.clone();
 
     // Create the event tap at HID level — the lowest level before events reach
     // any application. This is what Karabiner-Elements, BetterTouchTool, and
@@ -303,17 +366,31 @@ where
             let keycode = event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE);
             let flags = event.get_flags();
 
-            // Filter for primary triggers (Modifier keys)
-            if keycode != KC_PRIMARY_L && keycode != KC_PRIMARY_R {
+            // Filter for the supported modifier triggers only.
+            let is_control_key = keycode == KC_PRIMARY_L || keycode == KC_PRIMARY_R;
+            let is_option_key = keycode == KC_OPTION_L || keycode == KC_OPTION_R;
+            if !is_control_key && !is_option_key {
                 return CallbackResult::Keep;
             }
 
-            // Check specific bitmask for the Control key state
-            let is_press = flags.contains(CGEventFlags::CGEventFlagControl);
+            if is_control_key {
+                let is_press = flags.contains(CGEventFlags::CGEventFlagControl);
+                let mut s = cb_activation_state.lock().unwrap();
+                let emit_activation = evaluate_activation(&mut s, is_press);
+                drop(s);
 
-            let mut s = cb_state.lock().unwrap();
-            if evaluate_activation(&mut s, is_press) {
-                cb_on_activation();
+                if emit_activation {
+                    cb_on_activation();
+                }
+            } else {
+                let is_press = flags.contains(CGEventFlags::CGEventFlagAlternate);
+                let mut s = cb_option_tap_state.lock().unwrap();
+                let emit_single_tap = evaluate_option_tap(&mut s, is_press);
+                drop(s);
+
+                if emit_single_tap {
+                    cb_on_single_tap();
+                }
             }
 
             CallbackResult::Keep
@@ -322,7 +399,7 @@ where
 
     match tap_result {
         Ok(tap) => {
-            eprintln!("thuki: [activator] event tap created (HID level) — listening for double-tap Control");
+            eprintln!("thuki: [activator] event tap created (HID level) — listening for double-tap Control and single-tap Option");
             unsafe {
                 let loop_source = tap
                     .mach_port()
@@ -365,84 +442,86 @@ mod tests {
     }
 
     #[test]
-    fn validates_activation_sequence() {
+    fn first_control_press_starts_activation_sequence() {
         let mut state = ActivationState {
             last_trigger: None,
             is_pressed: false,
             last_activation: None,
         };
 
-        // First event
         assert!(!evaluate_activation(&mut state, true));
-        evaluate_activation(&mut state, false);
+        assert!(state.last_trigger.is_some());
+    }
 
-        // Sequence completion
+    #[test]
+    fn second_control_press_within_window_emits_activation() {
+        let mut state = ActivationState {
+            last_trigger: None,
+            is_pressed: false,
+            last_activation: None,
+        };
+
+        assert!(!evaluate_activation(&mut state, true));
+        assert!(!evaluate_activation(&mut state, false));
         assert!(evaluate_activation(&mut state, true));
     }
 
     #[test]
-    fn rejects_stale_sequence() {
+    fn rejects_stale_control_sequence() {
         let mut state = ActivationState {
             last_trigger: None,
             is_pressed: false,
             last_activation: None,
         };
 
-        evaluate_activation(&mut state, true);
-        evaluate_activation(&mut state, false);
+        assert!(!evaluate_activation(&mut state, true));
+        assert!(!evaluate_activation(&mut state, false));
 
-        // Simulate temporal drift beyond window
         state.last_trigger = Some(Instant::now() - Duration::from_millis(500));
 
         assert!(!evaluate_activation(&mut state, true));
     }
 
     #[test]
-    fn cooldown_rejects_activation_within_window() {
+    fn cooldown_rejects_control_activation_within_window() {
         let mut state = ActivationState {
             last_trigger: None,
             is_pressed: false,
             last_activation: None,
         };
 
-        // Complete first activation
-        evaluate_activation(&mut state, true);
-        evaluate_activation(&mut state, false);
+        assert!(!evaluate_activation(&mut state, true));
+        assert!(!evaluate_activation(&mut state, false));
         assert!(evaluate_activation(&mut state, true));
-        evaluate_activation(&mut state, false);
+        assert!(!evaluate_activation(&mut state, false));
 
-        // Try to activate again immediately — within 600ms cooldown
-        evaluate_activation(&mut state, true);
-        evaluate_activation(&mut state, false);
-        // This should be rejected by cooldown
+        assert!(!evaluate_activation(&mut state, true));
+        assert!(!evaluate_activation(&mut state, false));
         assert!(!evaluate_activation(&mut state, true));
     }
 
     #[test]
-    fn cooldown_allows_activation_after_expiry() {
+    fn cooldown_allows_control_activation_after_expiry() {
         let mut state = ActivationState {
             last_trigger: None,
             is_pressed: false,
             last_activation: None,
         };
 
-        // Complete first activation
-        evaluate_activation(&mut state, true);
-        evaluate_activation(&mut state, false);
+        assert!(!evaluate_activation(&mut state, true));
+        assert!(!evaluate_activation(&mut state, false));
         assert!(evaluate_activation(&mut state, true));
-        evaluate_activation(&mut state, false);
+        assert!(!evaluate_activation(&mut state, false));
 
-        // Simulate cooldown expiry
         state.last_activation = Some(Instant::now() - Duration::from_millis(700));
 
-        // Should work now
-        evaluate_activation(&mut state, true);
-        evaluate_activation(&mut state, false);
+        assert!(!evaluate_activation(&mut state, true));
+        assert!(!evaluate_activation(&mut state, false));
         assert!(evaluate_activation(&mut state, true));
     }
 
     #[test]
-    fn boundary_timing_at_exactly_400ms_is_rejected() {
+    fn boundary_timing_at_exactly_400ms_starts_a_new_control_sequence() {
         let mut state = ActivationState {
             last_trigger: Some(Instant::now() - Duration::from_millis(400)),
             is_pressed: false,
@@ -464,7 +543,7 @@ mod tests {
     }
 
     #[test]
-    fn first_tap_records_timestamp() {
+    fn state_resets_after_successful_control_activation() {
         let mut state = ActivationState {
             last_trigger: None,
             is_pressed: false,
@@ -472,19 +551,7 @@ mod tests {
         };
 
         assert!(!evaluate_activation(&mut state, true));
-        assert!(state.last_trigger.is_some());
-    }
-
-    #[test]
-    fn state_resets_after_successful_activation() {
-        let mut state = ActivationState {
-            last_trigger: None,
-            is_pressed: false,
-            last_activation: None,
-        };
-
-        evaluate_activation(&mut state, true);
-        evaluate_activation(&mut state, false);
+        assert!(!evaluate_activation(&mut state, false));
         assert!(evaluate_activation(&mut state, true));
 
         assert!(state.last_trigger.is_none());
@@ -492,19 +559,19 @@ mod tests {
     }
 
     #[test]
-    fn repeated_press_without_release_is_ignored() {
+    fn repeated_control_press_without_release_is_ignored() {
         let mut state = ActivationState {
             last_trigger: None,
             is_pressed: false,
             last_activation: None,
         };
 
-        evaluate_activation(&mut state, true);
+        assert!(!evaluate_activation(&mut state, true));
         assert!(!evaluate_activation(&mut state, true));
     }
 
     #[test]
-    fn release_without_press_does_nothing() {
+    fn release_without_control_press_does_nothing() {
         let mut state = ActivationState {
             last_trigger: None,
             is_pressed: false,
@@ -513,5 +580,29 @@ mod tests {
 
         assert!(!evaluate_activation(&mut state, false));
         assert!(state.last_trigger.is_none());
+    }
+
+    #[test]
+    fn first_option_press_emits_compact_toggle_signal() {
+        let mut state = OptionTapState { is_pressed: false };
+
+        assert!(evaluate_option_tap(&mut state, true));
+    }
+
+    #[test]
+    fn repeated_option_press_without_release_is_ignored() {
+        let mut state = OptionTapState { is_pressed: false };
+
+        assert!(evaluate_option_tap(&mut state, true));
+        assert!(!evaluate_option_tap(&mut state, true));
+    }
+
+    #[test]
+    fn option_release_resets_pressed_state_for_next_compact_toggle() {
+        let mut state = OptionTapState { is_pressed: false };
+
+        assert!(evaluate_option_tap(&mut state, true));
+        assert!(!evaluate_option_tap(&mut state, false));
+        assert!(evaluate_option_tap(&mut state, true));
     }
 }

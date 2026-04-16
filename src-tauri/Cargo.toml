@@ -1,8 +1,8 @@
 [package]
-name = "thuki"
-version = "0.6.1"
+name = "thuki4"
+version = "4.0.0"
 description = "Thuki: The context-aware floating secretary"
-authors = ["Logan Nguyen"]
+authors = ["AI"]
 license = "Apache-2.0"
 repository = "https://github.com/quiet-node/thuki"
 homepage = "https://github.com/quiet-node/thuki"
@@ -43,4 +43,3 @@ core-foundation = "0.10"
 [dev-dependencies]
 mockito = "1"
 tokio = { version = "1", features = ["rt", "macros", "net", "io-util"] }
-

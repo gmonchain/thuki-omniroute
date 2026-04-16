@@ -27,7 +27,10 @@ mod activator;
 pub mod context;
 pub mod permissions;
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Mutex,
+};
 
 use tauri::{
     menu::{Menu, MenuItem},
@@ -70,6 +73,7 @@ const OVERLAY_LOGICAL_HEIGHT_COLLAPSED: f64 = 80.0;
 const OVERLAY_VISIBILITY_EVENT: &str = "thuki://visibility";
 const OVERLAY_VISIBILITY_SHOW: &str = "show";
 const OVERLAY_VISIBILITY_HIDE_REQUEST: &str = "hide-request";
+const OVERLAY_COMPACT_TOGGLE_EVENT: &str = "thuki://compact-toggle";
 
 /// Frontend event that triggers the onboarding screen when one or more
 /// required permissions have not yet been granted.
@@ -81,6 +85,13 @@ const ONBOARDING_EVENT: &str = "thuki://onboarding";
 const ONBOARDING_LOGICAL_WIDTH: f64 = 460.0;
 const ONBOARDING_LOGICAL_HEIGHT: f64 = 640.0;
 
+/// Logical dimensions for the compact conversation pill shown beneath the
+/// macOS notch / menu-bar safe area. Match the native window width to the
+/// single visible capsule so the compact UI is centered exactly on screen.
+const COMPACT_OVERLAY_LOGICAL_WIDTH: f64 = 384.0;
+const COMPACT_OVERLAY_LOGICAL_HEIGHT: f64 = 48.0;
+const COMPACT_OVERLAY_TOP_MARGIN: f64 = 14.0;
+
 /// Tracks the intended visibility state of the overlay, preventing race conditions
 /// between the frontend exit animation and rapid activation toggles.
 static OVERLAY_INTENDED_VISIBLE: AtomicBool = AtomicBool::new(false);
@@ -90,6 +101,10 @@ static OVERLAY_INTENDED_VISIBLE: AtomicBool = AtomicBool::new(false);
 /// the frontend calls `notify_frontend_ready` after its event listener is
 /// registered, so the show event is guaranteed to have a listener.
 static LAUNCH_SHOW_PENDING: AtomicBool = AtomicBool::new(true);
+
+/// Monitor bounds captured when the overlay is shown, used to keep the compact
+/// pill centered on the same display instead of falling back to the main screen.
+static LAST_OVERLAY_MONITOR_BOUNDS: Mutex<Option<(f64, f64, f64, f64)>> = Mutex::new(None);
 
 /// Payload emitted to the frontend on every visibility transition.
 #[derive(Clone, serde::Serialize)]
@@ -106,6 +121,12 @@ struct VisibilityPayload {
     window_y: Option<f64>,
     /// Logical Y of the screen bottom edge (monitor origin + height).
     screen_bottom_y: Option<f64>,
+}
+
+/// Payload emitted when the frontend should toggle compact conversation mode.
+#[derive(Clone, serde::Serialize)]
+struct CompactTogglePayload {
+    state: &'static str,
 }
 
 /// Emits a visibility transition to the frontend animation controller.
@@ -126,6 +147,14 @@ fn emit_overlay_visibility(
             window_y,
             screen_bottom_y,
         },
+    );
+}
+
+/// Emits a compact-mode toggle request to the frontend.
+fn emit_overlay_compact_toggle(app_handle: &tauri::AppHandle) {
+    let _ = app_handle.emit(
+        OVERLAY_COMPACT_TOGGLE_EVENT,
+        CompactTogglePayload { state: "toggle" },
     );
 }
 
@@ -187,6 +216,29 @@ fn find_target_monitor(global_x: f64, global_y: f64) -> (f64, f64, f64, f64) {
 #[cfg(target_os = "macos")]
 fn monitor_info_fallback() -> (f64, f64, f64, f64) {
     cg_displays::main_display()
+}
+
+/// Returns the compact pill frame centered beneath the menu bar / notch safe area.
+#[cfg(target_os = "macos")]
+fn compact_top_center_frame_for_monitor(
+    mon_x: f64,
+    mon_y: f64,
+    screen_w: f64,
+) -> (f64, f64, f64, f64) {
+    let width = COMPACT_OVERLAY_LOGICAL_WIDTH.min(screen_w.max(1.0));
+    let x = mon_x + ((screen_w - width) / 2.0).max(0.0);
+    let y = mon_y + COMPACT_OVERLAY_TOP_MARGIN;
+
+    (x, y, width, COMPACT_OVERLAY_LOGICAL_HEIGHT)
+}
+
+#[cfg(target_os = "macos")]
+fn stored_compact_monitor_bounds() -> (f64, f64, f64, f64) {
+    LAST_OVERLAY_MONITOR_BOUNDS
+        .lock()
+        .ok()
+        .and_then(|guard| *guard)
+        .unwrap_or_else(monitor_info_fallback)
 }
 
 /// Shows the overlay and requests the frontend to replay its entrance animation.
@@ -251,6 +303,9 @@ fn show_overlay(app_handle: &tauri::AppHandle, ctx: crate::context::ActivationCo
         let _ = window.set_position(tauri::Position::Logical(tauri::LogicalPosition::new(
             global.x, global.y,
         )));
+        if let Ok(mut guard) = LAST_OVERLAY_MONITOR_BOUNDS.lock() {
+            *guard = Some((mon_x, mon_y, screen_w, screen_h));
+        }
         let screen_bottom = mon_y + screen_h;
         Some((global, screen_bottom))
     } else {
@@ -363,6 +418,31 @@ fn set_window_frame(app_handle: tauri::AppHandle, x: f64, y: f64, width: f64, he
             let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize::new(width, height)));
         }
     });
+}
+
+/// Repositions and resizes the main window into the compact pill frame at the
+/// top center of the primary display, just below the notch / menu-bar safe area.
+#[tauri::command]
+#[cfg_attr(coverage_nightly, coverage(off))]
+fn move_overlay_to_compact_top_center(app_handle: tauri::AppHandle) {
+    #[cfg(target_os = "macos")]
+    {
+        let (mon_x, mon_y, screen_w, _screen_h) = stored_compact_monitor_bounds();
+        let (x, y, width, height) = compact_top_center_frame_for_monitor(mon_x, mon_y, screen_w);
+
+        let handle = app_handle.clone();
+        let _ = app_handle.run_on_main_thread(move || {
+            if let Some(window) = handle.get_webview_window("main") {
+                let _ = window
+                    .set_position(tauri::Position::Logical(tauri::LogicalPosition::new(x, y)));
+                let _ =
+                    window.set_size(tauri::Size::Logical(tauri::LogicalSize::new(width, height)));
+            }
+        });
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    let _ = app_handle;
 }
 
 /// Synchronizes the Rust-side visibility tracking when the frontend
@@ -696,30 +776,49 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             {
                 let app_handle = app.handle().clone();
+                let activation_handle = app_handle.clone();
+                let compact_toggle_handle = app_handle.clone();
                 let activator = activator::OverlayActivator::new();
                 if permissions::is_accessibility_granted() {
-                    activator.start(move || {
-                        // Skip AX + clipboard when hiding — no context needed and
-                        // simulating Cmd+C against Thuki's own WebView would produce
-                        // a macOS alert sound.
-                        let is_visible = OVERLAY_INTENDED_VISIBLE.load(Ordering::SeqCst);
-                        let handle = app_handle.clone();
-                        let handle2 = app_handle.clone();
-                        // Dispatch context capture to a dedicated thread so the event
-                        // tap callback returns immediately. AX attribute lookups and
-                        // clipboard simulation can block for seconds (macOS AX default
-                        // timeout is ~6 s) when the focused app does not implement the
-                        // accessibility protocol. Blocking the tap callback freezes the
-                        // CFRunLoop and silently prevents all future key events from
-                        // being delivered to the activator.
-                        std::thread::spawn(move || {
-                            let ctx = crate::context::capture_activation_context(is_visible);
-                            let _ =
-                                handle.run_on_main_thread(move || toggle_overlay(&handle2, ctx));
-                        });
-                    });
+                    activator.start_with_single_tap(
+                        move || {
+                            if OVERLAY_INTENDED_VISIBLE.load(Ordering::SeqCst) {
+                                let run_handle = activation_handle.clone();
+                                let hide_handle = activation_handle.clone();
+                                let _ = run_handle.run_on_main_thread(move || {
+                                    request_overlay_hide(&hide_handle);
+                                });
+                                return;
+                            }
+
+                            let handle = activation_handle.clone();
+                            let handle2 = activation_handle.clone();
+                            // Dispatch context capture to a dedicated thread so the event
+                            // tap callback returns immediately. AX attribute lookups and
+                            // clipboard simulation can block for seconds (macOS AX default
+                            // timeout is ~6 s) when the focused app does not implement the
+                            // accessibility protocol. Blocking the tap callback freezes the
+                            // CFRunLoop and silently prevents all future key events from
+                            // being delivered to the activator.
+                            std::thread::spawn(move || {
+                                let ctx = crate::context::capture_activation_context(false);
+                                let _ =
+                                    handle.run_on_main_thread(move || show_overlay(&handle2, ctx));
+                            });
+                        },
+                        move || {
+                            if !OVERLAY_INTENDED_VISIBLE.load(Ordering::SeqCst) {
+                                return;
+                            }
+
+                            let run_handle = compact_toggle_handle.clone();
+                            let emit_handle = compact_toggle_handle.clone();
+                            let _ = run_handle.run_on_main_thread(move || {
+                                emit_overlay_compact_toggle(&emit_handle);
+                            });
+                        },
+                    );
                 }
-                app.manage(activator);
             }
 
             // ── Persistent HTTP client ────────────────────────────────
@@ -792,6 +891,7 @@ pub fn run() {
             notify_overlay_hidden,
             notify_frontend_ready,
             set_window_frame,
+            move_overlay_to_compact_top_center,
             #[cfg(not(coverage))]
             permissions::check_accessibility_permission,
             #[cfg(not(coverage))]
