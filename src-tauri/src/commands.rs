@@ -10,6 +10,16 @@ use tokio_util::sync::CancellationToken;
 pub const DEFAULT_API_ENDPOINT: &str = "http://localhost:20128/v1";
 pub const DEFAULT_MODEL_NAME: &str = "qw/qwen3-coder-plus";
 pub const DEFAULT_API_KEY: &str = "sk-3d2017a487150c52-29a4c5-8ed3c1b5";
+
+/// Default model list when no configuration is found in database or environment
+const DEFAULT_MODEL_LIST: &[&str] = &[
+    "qw/qwen3-coder-plus",
+    "qw/vision-model",
+    "cx/gpt-5.2",
+    "kc/openai/gpt-4o-mini",
+    "kr/claude-haiku-4.5",
+    "lc/LongCat-Flash-Chat",
+];
 const API_ENDPOINT_ENV_VAR: &str = "THUKI_API_ENDPOINT";
 const API_KEY_ENV_VAR: &str = "THUKI_API_KEY";
 const DEFAULT_SYSTEM_PROMPT: &str = include_str!("../prompts/system_prompt.txt");
@@ -324,6 +334,7 @@ pub struct ModelConfig {
     pub active: String,
     all: Mutex<Vec<String>>,
     runtime_active: Mutex<String>,
+    favorites: Mutex<Vec<String>>,
 }
 
 impl ModelConfig {
@@ -337,8 +348,19 @@ impl ModelConfig {
         self.all.lock().unwrap().clone()
     }
 
+    /// Returns the list of favorite models.
+    pub fn current_favorites(&self) -> Vec<String> {
+        self.favorites.lock().unwrap().clone()
+    }
+
+    /// Checks if a model is marked as favorite.
+    pub fn is_favorite(&self, model: &str) -> bool {
+        self.favorites.lock().unwrap().contains(&model.to_string())
+    }
+
     /// Updates the runtime-active model if it is present in the supported list.
-    pub fn set_active(&self, model: &str) -> Result<(), String> {
+    /// Persists the change to the database.
+    pub fn set_active(&self, model: &str, db_conn: &rusqlite::Connection) -> Result<(), String> {
         let trimmed = model.trim();
         if trimmed.is_empty() {
             return Err("Model name cannot be empty".to_string());
@@ -354,11 +376,17 @@ impl ModelConfig {
         }
 
         *self.runtime_active.lock().unwrap() = trimmed.to_string();
+
+        // Persist to database
+        crate::database::set_config(db_conn, "active_model", trimmed)
+            .map_err(|e| format!("Failed to persist active model: {}", e))?;
+
         Ok(())
     }
 
     /// Adds a model to the runtime-supported list.
-    pub fn add_model(&self, model: &str) -> Result<(), String> {
+    /// Persists the change to the database.
+    pub fn add_model(&self, model: &str, db_conn: &rusqlite::Connection) -> Result<(), String> {
         let trimmed = model.trim();
         if trimmed.is_empty() {
             return Err("Model name cannot be empty".to_string());
@@ -370,6 +398,12 @@ impl ModelConfig {
         }
 
         models.push(trimmed.to_string());
+
+        // Persist to database
+        let model_list = models.join(",");
+        crate::database::set_config(db_conn, "model_list", &model_list)
+            .map_err(|e| format!("Failed to persist model list: {}", e))?;
+
         Ok(())
     }
 
@@ -377,7 +411,8 @@ impl ModelConfig {
     ///
     /// If the removed model is currently active, the first remaining model
     /// becomes the new runtime-active model.
-    pub fn remove_model(&self, model: &str) -> Result<(), String> {
+    /// Persists the change to the database.
+    pub fn remove_model(&self, model: &str, db_conn: &rusqlite::Connection) -> Result<(), String> {
         let trimmed = model.trim();
         if trimmed.is_empty() {
             return Err("Model name cannot be empty".to_string());
@@ -395,39 +430,139 @@ impl ModelConfig {
         models.remove(index);
 
         let mut runtime_active = self.runtime_active.lock().unwrap();
-        if runtime_active.as_str() == trimmed {
-            *runtime_active = models
+        let new_active = if runtime_active.as_str() == trimmed {
+            let new = models
                 .first()
                 .cloned()
                 .unwrap_or_else(|| self.active.clone());
-        }
+            *runtime_active = new.clone();
+            new
+        } else {
+            runtime_active.clone()
+        };
+
+        // Persist to database
+        let model_list = models.join(",");
+        crate::database::set_config(db_conn, "model_list", &model_list)
+            .map_err(|e| format!("Failed to persist model list: {}", e))?;
+        crate::database::set_config(db_conn, "active_model", &new_active)
+            .map_err(|e| format!("Failed to persist active model: {}", e))?;
 
         Ok(())
     }
+
+    /// Toggles the favorite status of a model.
+    /// Persists the change to the database.
+    pub fn toggle_favorite(
+        &self,
+        model: &str,
+        db_conn: &rusqlite::Connection,
+    ) -> Result<bool, String> {
+        let trimmed = model.trim();
+        if trimmed.is_empty() {
+            return Err("Model name cannot be empty".to_string());
+        }
+
+        // Check if model exists in the all list
+        if !self
+            .all
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|candidate| candidate == trimmed)
+        {
+            return Err(format!("Model not found: {trimmed}"));
+        }
+
+        let mut favorites = self.favorites.lock().unwrap();
+        let is_now_favorite = if let Some(pos) = favorites.iter().position(|m| m == trimmed) {
+            favorites.remove(pos);
+            false
+        } else {
+            favorites.push(trimmed.to_string());
+            true
+        };
+
+        // Persist to database
+        let favorites_list = favorites.join(",");
+        crate::database::set_config(db_conn, "favorite_models", &favorites_list)
+            .map_err(|e| format!("Failed to persist favorites: {}", e))?;
+
+        Ok(is_now_favorite)
+    }
 }
 
-/// Reads `THUKI_SUPPORTED_AI_MODELS` from the environment and returns a
-/// `ModelConfig`. Trims whitespace around each entry and filters empty entries.
-/// Defaults to `[DEFAULT_MODEL_NAME]` when the variable is unset or empty.
-pub fn load_model_config() -> ModelConfig {
-    let models: Vec<String> = std::env::var("THUKI_SUPPORTED_AI_MODELS")
+/// Reads model configuration from the database first, falling back to
+/// `THUKI_SUPPORTED_AI_MODELS` environment variable if not found in database.
+/// Trims whitespace around each entry and filters empty entries.
+/// Defaults to `[DEFAULT_MODEL_NAME]` when neither source is available.
+pub fn load_model_config(db_conn: &rusqlite::Connection) -> ModelConfig {
+    // Try to load from database first
+    let db_models = crate::database::get_config(db_conn, "model_list")
         .ok()
-        .filter(|s| !s.trim().is_empty())
-        .map(|s| {
-            s.split(',')
+        .flatten()
+        .and_then(|s| {
+            let parsed: Vec<String> = s
+                .split(',')
                 .map(|m| m.trim().to_string())
                 .filter(|m| !m.is_empty())
-                .collect()
-        })
-        .unwrap_or_else(|| vec![DEFAULT_MODEL_NAME.to_string()]);
-    let active = models
-        .first()
-        .cloned()
-        .unwrap_or_else(|| DEFAULT_MODEL_NAME.to_string());
+                .collect();
+            if parsed.is_empty() {
+                None
+            } else {
+                Some(parsed)
+            }
+        });
+
+    let db_active = crate::database::get_config(db_conn, "active_model")
+        .ok()
+        .flatten();
+
+    let db_favorites = crate::database::get_config(db_conn, "favorite_models")
+        .ok()
+        .flatten()
+        .and_then(|s| {
+            let parsed: Vec<String> = s
+                .split(',')
+                .map(|m| m.trim().to_string())
+                .filter(|m| !m.is_empty())
+                .collect();
+            if parsed.is_empty() {
+                None
+            } else {
+                Some(parsed)
+            }
+        });
+
+    // Fallback to environment variable if database is empty
+    let models: Vec<String> = db_models.unwrap_or_else(|| {
+        std::env::var("THUKI_SUPPORTED_AI_MODELS")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .map(|s| {
+                s.split(',')
+                    .map(|m| m.trim().to_string())
+                    .filter(|m| !m.is_empty())
+                    .collect()
+            })
+            .unwrap_or_else(|| DEFAULT_MODEL_LIST.iter().map(|s| s.to_string()).collect())
+    });
+
+    let active = db_active.unwrap_or_else(|| {
+        models
+            .first()
+            .cloned()
+            .unwrap_or_else(|| DEFAULT_MODEL_NAME.to_string())
+    });
+
+    // If no favorites in database, mark all models as favorites by default
+    let favorites = db_favorites.unwrap_or_else(|| models.clone());
+
     ModelConfig {
         runtime_active: Mutex::new(active.clone()),
         active,
         all: Mutex::new(models),
+        favorites: Mutex::new(favorites),
     }
 }
 
@@ -437,7 +572,8 @@ pub fn load_model_config() -> ModelConfig {
 pub fn get_model_config(model_config: tauri::State<'_, ModelConfig>) -> serde_json::Value {
     serde_json::json!({
         "active": model_config.current_active(),
-        "all": model_config.current_all()
+        "all": model_config.current_all(),
+        "favorites": model_config.current_favorites()
     })
 }
 
@@ -447,11 +583,14 @@ pub fn get_model_config(model_config: tauri::State<'_, ModelConfig>) -> serde_js
 pub fn set_active_model(
     model: String,
     model_config: tauri::State<'_, ModelConfig>,
+    db: tauri::State<'_, crate::history::Database>,
 ) -> Result<serde_json::Value, String> {
-    model_config.set_active(&model)?;
+    let conn = db.0.lock().unwrap();
+    model_config.set_active(&model, &conn)?;
     Ok(serde_json::json!({
         "active": model_config.current_active(),
-        "all": model_config.current_all()
+        "all": model_config.current_all(),
+        "favorites": model_config.current_favorites()
     }))
 }
 
@@ -461,11 +600,14 @@ pub fn set_active_model(
 pub fn add_model(
     model: String,
     model_config: tauri::State<'_, ModelConfig>,
+    db: tauri::State<'_, crate::history::Database>,
 ) -> Result<serde_json::Value, String> {
-    model_config.add_model(&model)?;
+    let conn = db.0.lock().unwrap();
+    model_config.add_model(&model, &conn)?;
     Ok(serde_json::json!({
         "active": model_config.current_active(),
-        "all": model_config.current_all()
+        "all": model_config.current_all(),
+        "favorites": model_config.current_favorites()
     }))
 }
 
@@ -475,11 +617,32 @@ pub fn add_model(
 pub fn remove_model(
     model: String,
     model_config: tauri::State<'_, ModelConfig>,
+    db: tauri::State<'_, crate::history::Database>,
 ) -> Result<serde_json::Value, String> {
-    model_config.remove_model(&model)?;
+    let conn = db.0.lock().unwrap();
+    model_config.remove_model(&model, &conn)?;
     Ok(serde_json::json!({
         "active": model_config.current_active(),
-        "all": model_config.current_all()
+        "all": model_config.current_all(),
+        "favorites": model_config.current_favorites()
+    }))
+}
+
+/// Toggles the favorite status of a model.
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(not(coverage), tauri::command)]
+pub fn toggle_favorite_model(
+    model: String,
+    model_config: tauri::State<'_, ModelConfig>,
+    db: tauri::State<'_, crate::history::Database>,
+) -> Result<serde_json::Value, String> {
+    let conn = db.0.lock().unwrap();
+    let is_favorite = model_config.toggle_favorite(&model, &conn)?;
+    Ok(serde_json::json!({
+        "active": model_config.current_active(),
+        "all": model_config.current_all(),
+        "favorites": model_config.current_favorites(),
+        "is_favorite": is_favorite
     }))
 }
 
@@ -1386,16 +1549,24 @@ mod tests {
     fn load_model_config_returns_default_when_unset() {
         let _guard = ENV_LOCK.lock().unwrap();
         std::env::remove_var("THUKI_SUPPORTED_AI_MODELS");
-        let config = load_model_config();
+        let conn = crate::database::open_in_memory().unwrap();
+        let config = load_model_config(&conn);
         assert_eq!(config.active, DEFAULT_MODEL_NAME);
-        assert_eq!(model_list(&config), vec![DEFAULT_MODEL_NAME.to_string()]);
+        assert_eq!(
+            model_list(&config),
+            DEFAULT_MODEL_LIST
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<String>>()
+        );
     }
 
     #[test]
     fn load_model_config_reads_single_model() {
         let _guard = ENV_LOCK.lock().unwrap();
         std::env::set_var("THUKI_SUPPORTED_AI_MODELS", "gemma4:e4b");
-        let config = load_model_config();
+        let conn = crate::database::open_in_memory().unwrap();
+        let config = load_model_config(&conn);
         assert_eq!(config.active, "gemma4:e4b");
         assert_eq!(model_list(&config), vec!["gemma4:e4b".to_string()]);
         std::env::remove_var("THUKI_SUPPORTED_AI_MODELS");
@@ -1405,7 +1576,8 @@ mod tests {
     fn load_model_config_reads_multiple_models_first_is_active() {
         let _guard = ENV_LOCK.lock().unwrap();
         std::env::set_var("THUKI_SUPPORTED_AI_MODELS", "gemma4:e2b,gemma4:e4b");
-        let config = load_model_config();
+        let conn = crate::database::open_in_memory().unwrap();
+        let config = load_model_config(&conn);
         assert_eq!(config.active, "gemma4:e2b");
         assert_eq!(
             model_list(&config),
@@ -1418,7 +1590,8 @@ mod tests {
     fn load_model_config_trims_whitespace_around_entries() {
         let _guard = ENV_LOCK.lock().unwrap();
         std::env::set_var("THUKI_SUPPORTED_AI_MODELS", " gemma4:e2b , gemma4:e4b ");
-        let config = load_model_config();
+        let conn = crate::database::open_in_memory().unwrap();
+        let config = load_model_config(&conn);
         assert_eq!(config.active, "gemma4:e2b");
         assert_eq!(
             model_list(&config),
@@ -1431,9 +1604,16 @@ mod tests {
     fn load_model_config_falls_back_to_default_when_whitespace_only() {
         let _guard = ENV_LOCK.lock().unwrap();
         std::env::set_var("THUKI_SUPPORTED_AI_MODELS", "   ");
-        let config = load_model_config();
+        let conn = crate::database::open_in_memory().unwrap();
+        let config = load_model_config(&conn);
         assert_eq!(config.active, DEFAULT_MODEL_NAME);
-        assert_eq!(model_list(&config), vec![DEFAULT_MODEL_NAME.to_string()]);
+        assert_eq!(
+            model_list(&config),
+            DEFAULT_MODEL_LIST
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<String>>()
+        );
         std::env::remove_var("THUKI_SUPPORTED_AI_MODELS");
     }
 
@@ -1441,7 +1621,8 @@ mod tests {
     fn load_model_config_filters_empty_entries_from_list() {
         let _guard = ENV_LOCK.lock().unwrap();
         std::env::set_var("THUKI_SUPPORTED_AI_MODELS", "gemma4:e2b,,gemma4:e4b");
-        let config = load_model_config();
+        let conn = crate::database::open_in_memory().unwrap();
+        let config = load_model_config(&conn);
         assert_eq!(
             model_list(&config),
             vec!["gemma4:e2b".to_string(), "gemma4:e4b".to_string()]
@@ -1455,7 +1636,8 @@ mod tests {
         // All entries filter to empty strings, leaving an empty list.
         // The active model must still fall back to DEFAULT_MODEL_NAME.
         std::env::set_var("THUKI_SUPPORTED_AI_MODELS", ",");
-        let config = load_model_config();
+        let conn = crate::database::open_in_memory().unwrap();
+        let config = load_model_config(&conn);
         assert_eq!(config.active, DEFAULT_MODEL_NAME);
         assert_eq!(model_list(&config), Vec::<String>::new());
         std::env::remove_var("THUKI_SUPPORTED_AI_MODELS");
@@ -1463,13 +1645,15 @@ mod tests {
 
     #[test]
     fn add_model_appends_a_new_runtime_model() {
+        let conn = crate::database::open_in_memory().unwrap();
         let config = ModelConfig {
             active: "gemma4:e2b".to_string(),
             all: Mutex::new(vec!["gemma4:e2b".to_string()]),
             runtime_active: Mutex::new("gemma4:e2b".to_string()),
+            favorites: Mutex::new(vec!["gemma4:e2b".to_string()]),
         };
 
-        config.add_model("gemma4:e4b").unwrap();
+        config.add_model("gemma4:e4b", &conn).unwrap();
 
         assert_eq!(
             model_list(&config),
@@ -1480,13 +1664,15 @@ mod tests {
 
     #[test]
     fn remove_model_switches_runtime_active_when_current_model_is_removed() {
+        let conn = crate::database::open_in_memory().unwrap();
         let config = ModelConfig {
             active: "gemma4:e2b".to_string(),
             all: Mutex::new(vec!["gemma4:e2b".to_string(), "gemma4:e4b".to_string()]),
             runtime_active: Mutex::new("gemma4:e4b".to_string()),
+            favorites: Mutex::new(vec!["gemma4:e2b".to_string(), "gemma4:e4b".to_string()]),
         };
 
-        config.remove_model("gemma4:e4b").unwrap();
+        config.remove_model("gemma4:e4b", &conn).unwrap();
 
         assert_eq!(model_list(&config), vec!["gemma4:e2b".to_string()]);
         assert_eq!(config.current_active(), "gemma4:e2b");
@@ -1494,17 +1680,228 @@ mod tests {
 
     #[test]
     fn remove_model_rejects_removing_the_last_model() {
+        let conn = crate::database::open_in_memory().unwrap();
         let config = ModelConfig {
             active: "gemma4:e2b".to_string(),
             all: Mutex::new(vec!["gemma4:e2b".to_string()]),
             runtime_active: Mutex::new("gemma4:e2b".to_string()),
+            favorites: Mutex::new(vec!["gemma4:e2b".to_string()]),
         };
 
-        let error = config.remove_model("gemma4:e2b").unwrap_err();
+        let error = config.remove_model("gemma4:e2b", &conn).unwrap_err();
 
         assert_eq!(error, "Cannot remove the last model");
         assert_eq!(model_list(&config), vec!["gemma4:e2b".to_string()]);
         assert_eq!(config.current_active(), "gemma4:e2b");
+    }
+
+    #[test]
+    fn load_model_config_reads_from_database_when_present() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("THUKI_SUPPORTED_AI_MODELS");
+
+        let conn = crate::database::open_in_memory().unwrap();
+
+        // Persist some models to database
+        crate::database::set_config(&conn, "model_list", "model-a,model-b,model-c").unwrap();
+        crate::database::set_config(&conn, "active_model", "model-b").unwrap();
+
+        let config = load_model_config(&conn);
+
+        assert_eq!(config.active, "model-b");
+        assert_eq!(config.current_active(), "model-b");
+        assert_eq!(
+            model_list(&config),
+            vec![
+                "model-a".to_string(),
+                "model-b".to_string(),
+                "model-c".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn load_model_config_prefers_database_over_env_variable() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::set_var("THUKI_SUPPORTED_AI_MODELS", "env-model-1,env-model-2");
+
+        let conn = crate::database::open_in_memory().unwrap();
+
+        // Database should take precedence
+        crate::database::set_config(&conn, "model_list", "db-model-1,db-model-2").unwrap();
+        crate::database::set_config(&conn, "active_model", "db-model-2").unwrap();
+
+        let config = load_model_config(&conn);
+
+        assert_eq!(config.active, "db-model-2");
+        assert_eq!(
+            model_list(&config),
+            vec!["db-model-1".to_string(), "db-model-2".to_string()]
+        );
+
+        std::env::remove_var("THUKI_SUPPORTED_AI_MODELS");
+    }
+
+    #[test]
+    fn add_model_persists_to_database() {
+        let conn = crate::database::open_in_memory().unwrap();
+        let config = ModelConfig {
+            active: "model-a".to_string(),
+            all: Mutex::new(vec!["model-a".to_string()]),
+            runtime_active: Mutex::new("model-a".to_string()),
+            favorites: Mutex::new(vec!["model-a".to_string()]),
+        };
+
+        config.add_model("model-b", &conn).unwrap();
+
+        // Verify it was persisted
+        let persisted = crate::database::get_config(&conn, "model_list")
+            .unwrap()
+            .unwrap();
+        assert_eq!(persisted, "model-a,model-b");
+    }
+
+    #[test]
+    fn set_active_persists_to_database() {
+        let conn = crate::database::open_in_memory().unwrap();
+        let config = ModelConfig {
+            active: "model-a".to_string(),
+            all: Mutex::new(vec!["model-a".to_string(), "model-b".to_string()]),
+            runtime_active: Mutex::new("model-a".to_string()),
+            favorites: Mutex::new(vec!["model-a".to_string(), "model-b".to_string()]),
+        };
+
+        config.set_active("model-b", &conn).unwrap();
+
+        // Verify it was persisted
+        let persisted = crate::database::get_config(&conn, "active_model")
+            .unwrap()
+            .unwrap();
+        assert_eq!(persisted, "model-b");
+        assert_eq!(config.current_active(), "model-b");
+    }
+
+    #[test]
+    fn remove_model_persists_to_database() {
+        let conn = crate::database::open_in_memory().unwrap();
+        let config = ModelConfig {
+            active: "model-a".to_string(),
+            all: Mutex::new(vec!["model-a".to_string(), "model-b".to_string()]),
+            runtime_active: Mutex::new("model-b".to_string()),
+            favorites: Mutex::new(vec!["model-a".to_string(), "model-b".to_string()]),
+        };
+
+        config.remove_model("model-b", &conn).unwrap();
+
+        // Verify both model list and active model were persisted
+        let persisted_list = crate::database::get_config(&conn, "model_list")
+            .unwrap()
+            .unwrap();
+        let persisted_active = crate::database::get_config(&conn, "active_model")
+            .unwrap()
+            .unwrap();
+        assert_eq!(persisted_list, "model-a");
+        assert_eq!(persisted_active, "model-a");
+    }
+
+    #[test]
+    fn toggle_favorite_adds_model_to_favorites() {
+        let conn = crate::database::open_in_memory().unwrap();
+        let config = ModelConfig {
+            active: "model-a".to_string(),
+            all: Mutex::new(vec!["model-a".to_string(), "model-b".to_string()]),
+            runtime_active: Mutex::new("model-a".to_string()),
+            favorites: Mutex::new(vec!["model-a".to_string()]),
+        };
+
+        let is_favorite = config.toggle_favorite("model-b", &conn).unwrap();
+
+        assert!(is_favorite);
+        assert!(config.is_favorite("model-b"));
+        assert_eq!(config.current_favorites().len(), 2);
+
+        // Verify persistence
+        let persisted = crate::database::get_config(&conn, "favorite_models")
+            .unwrap()
+            .unwrap();
+        assert!(persisted.contains("model-a"));
+        assert!(persisted.contains("model-b"));
+    }
+
+    #[test]
+    fn toggle_favorite_removes_model_from_favorites() {
+        let conn = crate::database::open_in_memory().unwrap();
+        let config = ModelConfig {
+            active: "model-a".to_string(),
+            all: Mutex::new(vec!["model-a".to_string(), "model-b".to_string()]),
+            runtime_active: Mutex::new("model-a".to_string()),
+            favorites: Mutex::new(vec!["model-a".to_string(), "model-b".to_string()]),
+        };
+
+        let is_favorite = config.toggle_favorite("model-b", &conn).unwrap();
+
+        assert!(!is_favorite);
+        assert!(!config.is_favorite("model-b"));
+        assert_eq!(config.current_favorites().len(), 1);
+
+        // Verify persistence
+        let persisted = crate::database::get_config(&conn, "favorite_models")
+            .unwrap()
+            .unwrap();
+        assert_eq!(persisted, "model-a");
+    }
+
+    #[test]
+    fn toggle_favorite_rejects_nonexistent_model() {
+        let conn = crate::database::open_in_memory().unwrap();
+        let config = ModelConfig {
+            active: "model-a".to_string(),
+            all: Mutex::new(vec!["model-a".to_string()]),
+            runtime_active: Mutex::new("model-a".to_string()),
+            favorites: Mutex::new(vec!["model-a".to_string()]),
+        };
+
+        let error = config.toggle_favorite("nonexistent", &conn).unwrap_err();
+
+        assert_eq!(error, "Model not found: nonexistent");
+    }
+
+    #[test]
+    fn load_model_config_loads_favorites_from_database() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("THUKI_SUPPORTED_AI_MODELS");
+
+        let conn = crate::database::open_in_memory().unwrap();
+
+        crate::database::set_config(&conn, "model_list", "model-a,model-b,model-c").unwrap();
+        crate::database::set_config(&conn, "active_model", "model-b").unwrap();
+        crate::database::set_config(&conn, "favorite_models", "model-a,model-c").unwrap();
+
+        let config = load_model_config(&conn);
+
+        assert_eq!(
+            config.current_favorites(),
+            vec!["model-a".to_string(), "model-c".to_string()]
+        );
+        assert!(config.is_favorite("model-a"));
+        assert!(!config.is_favorite("model-b"));
+        assert!(config.is_favorite("model-c"));
+    }
+
+    #[test]
+    fn load_model_config_defaults_all_models_as_favorites() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("THUKI_SUPPORTED_AI_MODELS");
+
+        let conn = crate::database::open_in_memory().unwrap();
+
+        // No favorites in database
+        let config = load_model_config(&conn);
+
+        // All default models should be favorites
+        let all_models = config.current_all();
+        let favorites = config.current_favorites();
+        assert_eq!(all_models, favorites);
     }
 
     // ── sampling options test ────────────────────────────────────────────────

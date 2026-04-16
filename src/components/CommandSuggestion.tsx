@@ -355,12 +355,16 @@ interface CommandSuggestionProps {
   commands?: readonly Command[];
   /** Optional runtime model items shown in the same suggestion popover UI. */
   models?: readonly string[];
+  /** List of favorite model names (used to show star icon). */
+  favoriteModels?: readonly string[];
   /** Index of the currently highlighted row (-1 means nothing highlighted). */
   highlightedIndex: number;
   /** Called with the selected trigger or model name when a row is clicked. */
   onSelect: (value: string) => void;
   /** Called when the user clicks the delete button on a model row. */
   onDeleteModel?: (model: string) => void;
+  /** Called when the user clicks the star button on a model row. */
+  onToggleFavorite?: (model: string) => void;
 }
 
 /**
@@ -373,9 +377,11 @@ interface CommandSuggestionProps {
 export function CommandSuggestion({
   commands = [],
   models,
+  favoriteModels = [],
   highlightedIndex,
   onSelect,
   onDeleteModel,
+  onToggleFavorite,
 }: CommandSuggestionProps) {
   const isModelMode = models !== undefined;
   const listboxLabel = isModelMode
@@ -409,6 +415,7 @@ export function CommandSuggestion({
           >
             {models.map((model, index) => {
               const isHighlighted = index === highlightedIndex;
+              const isFavorite = favoriteModels.includes(model);
               return (
                 <li
                   key={model}
@@ -434,9 +441,46 @@ export function CommandSuggestion({
                     {model}
                   </span>
 
-                  <span className="text-xs text-text-secondary shrink-0">
-                    Runtime model
-                  </span>
+                  {onToggleFavorite && (
+                    <button
+                      type="button"
+                      aria-label={
+                        isFavorite ? `Unfavorite ${model}` : `Favorite ${model}`
+                      }
+                      className={`shrink-0 flex h-6 w-6 items-center justify-center rounded-md transition-colors duration-100 ${
+                        isFavorite
+                          ? 'text-yellow-400 hover:bg-yellow-500/10'
+                          : 'text-text-secondary hover:bg-white/5 hover:text-yellow-400'
+                      }`}
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        onToggleFavorite(model);
+                      }}
+                    >
+                      {isFavorite ? (
+                        <svg
+                          xmlns="http://www.w3.org/2000/svg"
+                          viewBox="0 0 24 24"
+                          fill="currentColor"
+                          className="w-4 h-4"
+                        >
+                          <path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z" />
+                        </svg>
+                      ) : (
+                        <svg
+                          xmlns="http://www.w3.org/2000/svg"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          className="w-4 h-4"
+                        >
+                          <path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z" />
+                        </svg>
+                      )}
+                    </button>
+                  )}
 
                   {onDeleteModel && (
                     <button

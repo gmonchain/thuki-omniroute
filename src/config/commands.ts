@@ -39,6 +39,11 @@ export const COMMANDS: readonly Command[] = [
     description: 'Remove a model from the runtime model list',
   },
   {
+    trigger: '/fav-model',
+    label: '/fav-model',
+    description: 'Toggle favorite status of a model',
+  },
+  {
     trigger: '/history',
     label: '/history',
     description: 'Toggle the history panel',

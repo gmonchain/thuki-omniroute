@@ -213,7 +213,6 @@ export function ConversationView({
           type: 'spring',
           stiffness: 300,
           damping: 20,
-          delay: 0.15,
         }}
         className="h-px shrink-0 bg-surface-border origin-center"
       />

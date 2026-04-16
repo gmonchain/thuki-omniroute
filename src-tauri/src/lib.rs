@@ -842,19 +842,24 @@ pub fn run() {
             // ── Persistent HTTP client ────────────────────────────────
             app.manage(reqwest::Client::new());
 
-            // ── Generation + conversation state ─────────────────────
-            app.manage(commands::GenerationState::new());
-            app.manage(commands::ConversationHistory::new());
-            app.manage(commands::SystemPrompt(commands::load_system_prompt()));
-            app.manage(commands::load_model_config());
-
             // ── SQLite database for conversation history ──────────
+            // Initialize database BEFORE ModelConfig so we can load persisted config
             let app_data_dir = app
                 .path()
                 .app_data_dir()
                 .expect("failed to resolve app data directory");
             let db_conn = database::open_database(&app_data_dir)
                 .expect("failed to initialise SQLite database");
+
+            // ── Generation + conversation state ─────────────────────
+            app.manage(commands::GenerationState::new());
+            app.manage(commands::ConversationHistory::new());
+            app.manage(commands::SystemPrompt(commands::load_system_prompt()));
+
+            // Load model config from database (with env variable fallback)
+            app.manage(commands::load_model_config(&db_conn));
+
+            // Manage database after loading config
             app.manage(history::Database(std::sync::Mutex::new(db_conn)));
 
             // ── Orphaned image cleanup (startup + periodic) ─────────
@@ -878,6 +883,8 @@ pub fn run() {
             commands::add_model,
             #[cfg(not(coverage))]
             commands::remove_model,
+            #[cfg(not(coverage))]
+            commands::toggle_favorite_model,
             #[cfg(not(coverage))]
             commands::get_api_config,
             #[cfg(not(coverage))]

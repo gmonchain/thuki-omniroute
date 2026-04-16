@@ -185,8 +185,10 @@ interface AskBarViewProps {
   onScreenshot: () => void;
   selectedModel?: string;
   modelOptions?: readonly string[];
+  favoriteModels?: readonly string[];
   onModelChange?: (model: string) => void;
   onModelDelete?: (model: string) => void;
+  onToggleFavorite?: (model: string) => void;
   isDragOver?: 'normal' | 'max';
 }
 
@@ -213,8 +215,10 @@ export function AskBarView({
   onScreenshot,
   selectedModel,
   modelOptions = DEFAULT_MODEL_OPTIONS,
+  favoriteModels,
   onModelChange,
   onModelDelete,
+  onToggleFavorite,
   isDragOver,
 }: AskBarViewProps) {
   const mirrorRef = useRef<HTMLDivElement>(null);
@@ -222,6 +226,12 @@ export function AskBarView({
   const safeModelOptions = modelOptions.length
     ? modelOptions
     : DEFAULT_MODEL_OPTIONS;
+
+  // Use favorite models for dropdown, fallback to all models if no favorites
+  const safeFavoriteModels =
+    favoriteModels && favoriteModels.length > 0
+      ? favoriteModels
+      : safeModelOptions;
 
   const flow = useMemo(
     () =>
@@ -362,6 +372,9 @@ export function AskBarView({
         : [],
     [showModelSuggestions, safeModelOptions, modelFilter],
   );
+
+  // For dropdown select, only show favorite models
+  const dropdownModels = safeFavoriteModels;
 
   useEffect(() => {
     setHighlightedIndex(0);
@@ -640,9 +653,11 @@ export function AskBarView({
             {showModelSuggestions ? (
               <CommandSuggestion
                 models={filteredModels}
+                favoriteModels={favoriteModels}
                 highlightedIndex={highlightedIndex}
                 onSelect={handleModelSuggestionSelect}
                 onDeleteModel={handleModelSuggestionDelete}
+                onToggleFavorite={onToggleFavorite}
               />
             ) : (
               <CommandSuggestion
@@ -729,7 +744,7 @@ export function AskBarView({
             aria-label="Select model"
             className="h-9 w-full rounded-lg border border-surface-border bg-surface-elevated px-3 text-xs text-text-primary outline-none transition-colors duration-150 disabled:cursor-default disabled:opacity-40"
           >
-            {safeModelOptions.map((model) => (
+            {dropdownModels.map((model) => (
               <option key={model} value={model}>
                 {model}
               </option>

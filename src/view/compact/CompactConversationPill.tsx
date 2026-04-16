@@ -1,4 +1,5 @@
 import { memo } from 'react';
+import { motion } from 'framer-motion';
 import type { Message } from '../../hooks/useAiChat';
 import { selectCompactConversationPillFlow } from '../conversationFlow';
 import { PixelGridIndicator } from '../../components/PixelGridIndicator';
@@ -18,9 +19,24 @@ export const CompactConversationPill = memo(function CompactConversationPill({
   });
 
   return (
-    <div
+    <motion.div
+      initial={{ width: 0, opacity: 0 }}
+      animate={{ width: 290, opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={(key) => {
+        if (key === 'exit') {
+          return {
+            duration: 0,
+          };
+        }
+        return {
+          type: 'spring',
+          stiffness: 300,
+          damping: 25,
+          duration: 0.4,
+        };
+      }}
       style={{
-        width: 290,
         height: 45,
         marginRight: 230,
         pointerEvents: 'none',
@@ -101,6 +117,6 @@ export const CompactConversationPill = memo(function CompactConversationPill({
           </g>
         </svg>
       </div>
-    </div>
+    </motion.div>
   );
 });

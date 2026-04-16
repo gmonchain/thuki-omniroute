@@ -46,7 +46,7 @@ const OVERLAY_COMPACT_TOGGLE_EVENT = 'thuki://compact-toggle';
  * in non-key windows, which stalls spring animations indefinitely and makes
  * `AnimatePresence.onExitComplete` unreliable when the panel is unfocused.
  */
-const HIDE_COMMIT_DELAY_MS = 130;
+const HIDE_COMMIT_DELAY_MS = 30;
 
 /** Must match `OVERLAY_LOGICAL_WIDTH` in `src-tauri/src/lib.rs`. */
 const OVERLAY_WIDTH = 600;
@@ -54,7 +54,6 @@ const OVERLAY_WIDTH = 600;
 const CONTAINER_VERTICAL_PADDING = 150;
 /** Max morphing-container height in chat mode (matches `max-h-[600px]`) + vertical padding. */
 const MAX_CHAT_WINDOW_HEIGHT = 100 + CONTAINER_VERTICAL_PADDING;
-
 /** Must match `OVERLAY_LOGICAL_HEIGHT_COLLAPSED` in `src-tauri/src/lib.rs`. */
 const COLLAPSED_WINDOW_HEIGHT = 80;
 
@@ -225,6 +224,7 @@ function App() {
   const [modelConfig, setModelConfig] = useState<{
     active: string;
     all: string[];
+    favorites: string[];
   } | null>(null);
 
   /**
@@ -1053,6 +1053,7 @@ function App() {
     const modelTrigger = Array.from(found).find(
       (t) => t === '/add-model' || t === '/del-model',
     );
+    const hasFavModel = found.has('/fav-model');
 
     // Check for utility commands with prompt templates.
     const utilityTrigger = Array.from(found).find((t) => {
@@ -1071,6 +1072,7 @@ function App() {
       !hasModel &&
       !hasEndpoint &&
       !hasApiKey &&
+      !hasFavModel &&
       !((utilityTrigger || hasThink) && selectedContext?.trim())
     )
       return;
@@ -1085,7 +1087,31 @@ function App() {
       const nextModel = strippedMessage.trim();
       if (!nextModel) return;
 
-      void invoke<{ active: string; all: string[] }>('set_active_model', {
+      void invoke<{ active: string; all: string[]; favorites: string[] }>(
+        'set_active_model',
+        {
+          model: nextModel,
+        },
+      )
+        .then((nextConfig) => {
+          setModelConfig(nextConfig);
+          setQuery('');
+        })
+        .catch(() => undefined);
+
+      return;
+    }
+
+    if (hasFavModel) {
+      const nextModel = strippedMessage.trim();
+      if (!nextModel) return;
+
+      void invoke<{
+        active: string;
+        all: string[];
+        favorites: string[];
+        is_favorite: boolean;
+      }>('toggle_favorite_model', {
         model: nextModel,
       })
         .then((nextConfig) => {
@@ -1134,9 +1160,12 @@ function App() {
       const command =
         modelTrigger === '/add-model' ? 'add_model' : 'remove_model';
 
-      void invoke<{ active: string; all: string[] }>(command, {
-        model: nextModel,
-      })
+      void invoke<{ active: string; all: string[]; favorites: string[] }>(
+        command,
+        {
+          model: nextModel,
+        },
+      )
         .then((nextConfig) => {
           setModelConfig(nextConfig);
           setQuery('');
@@ -1367,15 +1396,34 @@ function App() {
   }, [isSubmitPending, cancel, setSelectedContext]);
 
   const handleModelChange = useCallback((nextModel: string) => {
-    void invoke<{ active: string; all: string[] }>('set_active_model', {
-      model: nextModel,
-    })
+    void invoke<{ active: string; all: string[]; favorites: string[] }>(
+      'set_active_model',
+      {
+        model: nextModel,
+      },
+    )
       .then(setModelConfig)
       .catch(() => undefined);
   }, []);
 
   const handleModelDelete = useCallback((model: string) => {
-    void invoke<{ active: string; all: string[] }>('remove_model', {
+    void invoke<{ active: string; all: string[]; favorites: string[] }>(
+      'remove_model',
+      {
+        model,
+      },
+    )
+      .then(setModelConfig)
+      .catch(() => undefined);
+  }, []);
+
+  const handleToggleFavorite = useCallback((model: string) => {
+    void invoke<{
+      active: string;
+      all: string[];
+      favorites: string[];
+      is_favorite: boolean;
+    }>('toggle_favorite_model', {
       model,
     })
       .then(setModelConfig)
@@ -1384,9 +1432,9 @@ function App() {
 
   /** Fetches model configuration from the backend once at mount. */
   useEffect(() => {
-    void invoke<{ active: string; all: string[] }>('get_model_config').then(
-      setModelConfig,
-    );
+    void invoke<{ active: string; all: string[]; favorites: string[] }>(
+      'get_model_config',
+    ).then(setModelConfig);
   }, []);
 
   /**
@@ -1805,8 +1853,10 @@ function App() {
                     onScreenshot={handleScreenshot}
                     selectedModel={flow.selectedModel}
                     modelOptions={flow.modelOptions}
+                    favoriteModels={modelConfig?.favorites}
                     onModelChange={handleModelChange}
                     onModelDelete={handleModelDelete}
+                    onToggleFavorite={handleToggleFavorite}
                     isDragOver={isDragOver ?? undefined}
                   />
                 </div>
