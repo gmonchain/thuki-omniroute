@@ -17,6 +17,7 @@ import { COMMANDS } from '../config/commands';
 import { MAX_IMAGE_SIZE_BYTES } from '../types/image';
 import type { AttachedImage } from '../types/image';
 import { formatQuotedText } from '../utils/formatQuote';
+import { selectAskBarFlow } from './conversationFlow';
 
 /**
  * Hoisted static SVG — prevents re-allocation on every render cycle.
@@ -221,12 +222,38 @@ export function AskBarView({
   const safeModelOptions = modelOptions.length
     ? modelOptions
     : DEFAULT_MODEL_OPTIONS;
-  const initialModel =
-    selectedModel ?? safeModelOptions[0] ?? DEFAULT_MODEL_OPTIONS[0] ?? '';
 
-  const isBusy = isGenerating || isSubmitPending;
-  const canSubmit =
-    (query.trim().length > 0 || attachedImages.length > 0) && !isBusy;
+  const flow = useMemo(
+    () =>
+      selectAskBarFlow({
+        messages: [],
+        query,
+        selectedText,
+        attachedImages,
+        isGenerating,
+        isSubmitPending,
+        selectedModel,
+        modelOptions: safeModelOptions,
+      }),
+    [
+      query,
+      selectedText,
+      attachedImages,
+      isGenerating,
+      isSubmitPending,
+      selectedModel,
+      safeModelOptions,
+    ],
+  );
+
+  const initialModel =
+    flow.selectedModel ??
+    flow.modelOptions[0] ??
+    DEFAULT_MODEL_OPTIONS[0] ??
+    '';
+
+  const isBusy = flow.isBusy;
+  const canSubmit = flow.canSubmit;
 
   const [pasteMaxError, setPasteMaxError] = useState(false);
   const [internalSelectedModel, setInternalSelectedModel] =
@@ -547,7 +574,7 @@ export function AskBarView({
         ? 'ring-2 ring-primary/40 ring-inset rounded-lg'
         : '';
 
-  const effectiveModel = selectedModel ?? internalSelectedModel;
+  const effectiveModel = flow.selectedModel ?? internalSelectedModel;
 
   const handleModelSelect = useCallback(
     (e: ChangeEvent<HTMLSelectElement>) => {
@@ -560,12 +587,12 @@ export function AskBarView({
 
   return (
     <div className={`flex w-full shrink-0 flex-col ${ringClass}`}>
-      {selectedText && (
+      {flow.selectedText && (
         <div className="px-4 pb-2.5 pt-2.5">
           <p className="select-text whitespace-pre-wrap text-xs italic text-text-secondary">
             &ldquo;
             {formatQuotedText(
-              selectedText,
+              flow.selectedText,
               quote.maxDisplayLines,
               quote.maxDisplayChars,
             )}
@@ -682,7 +709,7 @@ export function AskBarView({
             disabled={isBusy}
             autoFocus
             rows={1}
-            placeholder={isChatMode ? 'Reply...' : 'Ask Thuki anything...'}
+            placeholder={flow.placeholder}
             className="relative w-full resize-none border-none bg-transparent px-2 pt-2 pb-0 text-sm leading-relaxed text-transparent outline-none placeholder:text-text-secondary disabled:opacity-50"
             style={{ caretColor: 'var(--color-text-primary)' }}
           />
@@ -710,20 +737,20 @@ export function AskBarView({
 
         <motion.button
           type="button"
-          onClick={isBusy ? onCancel : onSubmit}
-          disabled={!canSubmit && !isBusy}
-          whileHover={canSubmit || isBusy ? { scale: 1.08 } : undefined}
-          whileTap={canSubmit || isBusy ? { scale: 0.92 } : undefined}
+          onClick={flow.canCancel ? onCancel : onSubmit}
+          disabled={!canSubmit && !flow.canCancel}
+          whileHover={canSubmit || flow.canCancel ? { scale: 1.08 } : undefined}
+          whileTap={canSubmit || flow.canCancel ? { scale: 0.92 } : undefined}
           className={`relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors duration-200 ${
-            isBusy
+            flow.canCancel
               ? 'stop-btn-ring cursor-pointer bg-red-500/10 text-red-400'
               : canSubmit
                 ? 'cursor-pointer bg-primary text-neutral'
                 : 'cursor-default bg-surface-elevated text-text-secondary'
           }`}
-          aria-label={isBusy ? 'Stop generating' : 'Send message'}
+          aria-label={flow.actionButtonLabel}
         >
-          {isBusy ? (
+          {flow.canCancel ? (
             <>
               {BORDER_TRACE_RING}
               {STOP_ICON}

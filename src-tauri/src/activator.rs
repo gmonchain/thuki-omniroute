@@ -32,9 +32,6 @@ use core_graphics::event::{
 /// Maximum temporal proximity between trigger events to qualify as an activation signal.
 const ACTIVATION_WINDOW: Duration = Duration::from_millis(400);
 
-/// Minimum interval between successive activations to prevent accidental double-toggles.
-const ACTIVATION_COOLDOWN: Duration = Duration::from_millis(600);
-
 /// Primary keycodes used for the double-tap activation sequence (macOS Control keys).
 const KC_PRIMARY_L: i64 = 0x3b;
 const KC_PRIMARY_R: i64 = 0x3e;
@@ -93,8 +90,6 @@ struct ActivationState {
     last_trigger: Option<Instant>,
     /// Tracks the current physical state of the trigger key.
     is_pressed: bool,
-    /// Timestamp of the last successful activation to enforce cooldown.
-    last_activation: Option<Instant>,
 }
 
 /// Internal state tracking for the single-tap Option gesture.
@@ -113,18 +108,9 @@ fn evaluate_activation(state: &mut ActivationState, is_press: bool) -> bool {
         state.is_pressed = true;
         let now = Instant::now();
 
-        // Enforce cooldown period after a successful activation to prevent
-        // rapid tapping from triggering multiple toggles.
-        if let Some(last_act) = state.last_activation {
-            if now.duration_since(last_act) < ACTIVATION_COOLDOWN {
-                return false;
-            }
-        }
-
         if let Some(last) = state.last_trigger {
             if now.duration_since(last) < ACTIVATION_WINDOW {
                 state.last_trigger = None;
-                state.last_activation = Some(now);
                 return true;
             }
         }
@@ -310,7 +296,6 @@ where
     let activation_state = Arc::new(Mutex::new(ActivationState {
         last_trigger: None,
         is_pressed: false,
-        last_activation: None,
     }));
     let option_tap_state = Arc::new(Mutex::new(OptionTapState { is_pressed: false }));
 
@@ -446,7 +431,6 @@ mod tests {
         let mut state = ActivationState {
             last_trigger: None,
             is_pressed: false,
-            last_activation: None,
         };
 
         assert!(!evaluate_activation(&mut state, true));
@@ -458,7 +442,6 @@ mod tests {
         let mut state = ActivationState {
             last_trigger: None,
             is_pressed: false,
-            last_activation: None,
         };
 
         assert!(!evaluate_activation(&mut state, true));
@@ -471,7 +454,6 @@ mod tests {
         let mut state = ActivationState {
             last_trigger: None,
             is_pressed: false,
-            last_activation: None,
         };
 
         assert!(!evaluate_activation(&mut state, true));
@@ -483,37 +465,16 @@ mod tests {
     }
 
     #[test]
-    fn cooldown_rejects_control_activation_within_window() {
+    fn second_double_tap_can_reactivate_immediately() {
         let mut state = ActivationState {
             last_trigger: None,
             is_pressed: false,
-            last_activation: None,
         };
 
         assert!(!evaluate_activation(&mut state, true));
         assert!(!evaluate_activation(&mut state, false));
         assert!(evaluate_activation(&mut state, true));
         assert!(!evaluate_activation(&mut state, false));
-
-        assert!(!evaluate_activation(&mut state, true));
-        assert!(!evaluate_activation(&mut state, false));
-        assert!(!evaluate_activation(&mut state, true));
-    }
-
-    #[test]
-    fn cooldown_allows_control_activation_after_expiry() {
-        let mut state = ActivationState {
-            last_trigger: None,
-            is_pressed: false,
-            last_activation: None,
-        };
-
-        assert!(!evaluate_activation(&mut state, true));
-        assert!(!evaluate_activation(&mut state, false));
-        assert!(evaluate_activation(&mut state, true));
-        assert!(!evaluate_activation(&mut state, false));
-
-        state.last_activation = Some(Instant::now() - Duration::from_millis(700));
 
         assert!(!evaluate_activation(&mut state, true));
         assert!(!evaluate_activation(&mut state, false));
@@ -525,7 +486,6 @@ mod tests {
         let mut state = ActivationState {
             last_trigger: Some(Instant::now() - Duration::from_millis(400)),
             is_pressed: false,
-            last_activation: None,
         };
 
         assert!(!evaluate_activation(&mut state, true));
@@ -536,7 +496,6 @@ mod tests {
         let mut state = ActivationState {
             last_trigger: Some(Instant::now() - Duration::from_millis(399)),
             is_pressed: false,
-            last_activation: None,
         };
 
         assert!(evaluate_activation(&mut state, true));
@@ -547,7 +506,6 @@ mod tests {
         let mut state = ActivationState {
             last_trigger: None,
             is_pressed: false,
-            last_activation: None,
         };
 
         assert!(!evaluate_activation(&mut state, true));
@@ -555,7 +513,6 @@ mod tests {
         assert!(evaluate_activation(&mut state, true));
 
         assert!(state.last_trigger.is_none());
-        assert!(state.last_activation.is_some());
     }
 
     #[test]
@@ -563,7 +520,6 @@ mod tests {
         let mut state = ActivationState {
             last_trigger: None,
             is_pressed: false,
-            last_activation: None,
         };
 
         assert!(!evaluate_activation(&mut state, true));
@@ -575,7 +531,6 @@ mod tests {
         let mut state = ActivationState {
             last_trigger: None,
             is_pressed: false,
-            last_activation: None,
         };
 
         assert!(!evaluate_activation(&mut state, false));

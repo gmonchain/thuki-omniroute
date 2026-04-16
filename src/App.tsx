@@ -6,6 +6,7 @@ import {
   useCallback,
   useRef,
   useLayoutEffect,
+  useMemo,
 } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
@@ -17,6 +18,7 @@ import { useConversationHistory } from './hooks/useConversationHistory';
 import { ConversationView } from './view/ConversationView';
 import { CompactConversationPill } from './view/compact/CompactConversationPill';
 import { AskBarView, MAX_IMAGES } from './view/AskBarView';
+import { createConversationFlow } from './view/conversationFlow';
 import { OnboardingView } from './view/onboarding/index';
 import type { OnboardingStage } from './view/onboarding/index';
 import { HistoryPanel } from './components/HistoryPanel';
@@ -236,7 +238,35 @@ function App() {
    * chat window state with message bubbles. Transitions from input-bar mode
    * to chat-window mode are animated via Framer Motion `layout` prop.
    */
-  const isChatMode = messages.length > 0 || isGenerating || isSubmitPending;
+  const flow = useMemo(
+    () =>
+      createConversationFlow({
+        messages,
+        pendingUserMessage,
+        query,
+        selectedText: selectedContext,
+        attachedImages,
+        isGenerating,
+        isSubmitPending,
+        selectedModel: modelConfig?.active,
+        modelOptions: modelConfig?.all,
+        isSaved,
+        canSave: !isGenerating && messages.some((m) => m.role === 'assistant'),
+      }),
+    [
+      messages,
+      pendingUserMessage,
+      query,
+      selectedContext,
+      attachedImages,
+      isGenerating,
+      isSubmitPending,
+      modelConfig,
+      isSaved,
+    ],
+  );
+
+  const isChatMode = flow.isChatMode;
   const isCompactMode = compactMode === 'compact';
   const isCollapsingToCompact = compactMode === 'collapsing';
   const previousIsChatModeRef = useRef(isChatMode);
@@ -246,7 +276,7 @@ function App() {
    * complete response. We check for an assistant message rather than any message
    * so the button never appears during the very first user-only half-turn.
    */
-  const canSave = !isGenerating && messages.some((m) => m.role === 'assistant');
+  const canSave = flow.canSave;
   const shouldRenderOverlay = overlayState === 'visible';
 
   /**
@@ -1648,12 +1678,8 @@ function App() {
           isCompactMode || isCollapsingToCompact ? (
             <CompactConversationPill
               key={`compact-${sessionId}`}
-              messages={
-                pendingUserMessage
-                  ? [...messages, pendingUserMessage]
-                  : messages
-              }
-              isGenerating={isGenerating || isSubmitPending}
+              messages={flow.visibleMessages}
+              isGenerating={flow.isBusy}
             />
           ) : (
             <motion.div
@@ -1692,12 +1718,8 @@ function App() {
                   <AnimatePresence>
                     {isChatMode ? (
                       <ConversationView
-                        messages={
-                          pendingUserMessage
-                            ? [...messages, pendingUserMessage]
-                            : messages
-                        }
-                        isGenerating={isGenerating || isSubmitPending}
+                        messages={flow.visibleMessages}
+                        isGenerating={flow.isBusy}
                         onClose={handleCloseOverlay}
                         onSave={handleSave}
                         isSaved={isSaved}
@@ -1764,21 +1786,23 @@ function App() {
                   <AskBarView
                     query={query}
                     setQuery={setQuery}
-                    isChatMode={isChatMode}
-                    isGenerating={isGenerating}
-                    isSubmitPending={isSubmitPending}
+                    isChatMode={flow.isChatMode}
+                    isGenerating={flow.isGenerating}
+                    isSubmitPending={flow.isSubmitPending}
                     onSubmit={handleSubmit}
                     onCancel={handleCancel}
                     inputRef={inputRef}
-                    selectedText={selectedContext ?? undefined}
+                    selectedText={flow.selectedText ?? undefined}
                     onHistoryOpen={handleHistoryToggle}
-                    attachedImages={isSubmitPending ? [] : attachedImages}
+                    attachedImages={
+                      flow.isSubmitPending ? [] : flow.attachedImages
+                    }
                     onImagesAttached={handleImagesAttached}
                     onImageRemove={handleImageRemove}
                     onImagePreview={handleAskBarImagePreview}
                     onScreenshot={handleScreenshot}
-                    selectedModel={modelConfig?.active}
-                    modelOptions={modelConfig?.all}
+                    selectedModel={flow.selectedModel}
+                    modelOptions={flow.modelOptions}
                     onModelChange={handleModelChange}
                     onModelDelete={handleModelDelete}
                     isDragOver={isDragOver ?? undefined}

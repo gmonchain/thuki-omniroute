@@ -4,6 +4,7 @@ import { ChatBubble } from '../components/ChatBubble';
 import { TypingIndicator } from '../components/TypingIndicator';
 import { WindowControls } from '../components/WindowControls';
 import type { Message } from '../hooks/useAiChat';
+import { selectConversationFlow } from './conversationFlow';
 
 /**
  * Props for the ConversationView component.
@@ -67,6 +68,12 @@ export function ConversationView({
   onImagePreview,
 }: ConversationViewProps) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const flow = selectConversationFlow({
+    messages,
+    isGenerating,
+    isSaved,
+    canSave,
+  });
 
   /** Threshold in pixels — if within this distance of the bottom, consider "near bottom". */
   const NEAR_BOTTOM_THRESHOLD = 60;
@@ -121,14 +128,14 @@ export function ConversationView({
    * the current scroll lock state so the user can keep reading where they are.
    */
   useEffect(() => {
-    if (messages.length > prevMessagesLengthRef.current) {
-      const newest = messages[messages.length - 1];
+    if (flow.messages.length > prevMessagesLengthRef.current) {
+      const newest = flow.messages[flow.messages.length - 1];
       if (newest?.role === 'user') {
         shouldAutoScrollRef.current = true;
       }
     }
-    prevMessagesLengthRef.current = messages.length;
-  }, [messages.length, messages]);
+    prevMessagesLengthRef.current = flow.messages.length;
+  }, [flow.messages]);
 
   /**
    * Auto-scroll the chat container to the bottom when new content arrives,
@@ -147,7 +154,7 @@ export function ConversationView({
     });
 
     return () => cancelAnimationFrame(raf);
-  }, [messages, isGenerating]);
+  }, [flow.messages, flow.isGenerating]);
 
   return (
     <motion.div
@@ -161,8 +168,8 @@ export function ConversationView({
       <WindowControls
         onClose={onClose}
         onSave={onSave}
-        isSaved={isSaved}
-        canSave={canSave}
+        isSaved={flow.isSaved}
+        canSave={flow.canSave}
         onNewConversation={onNewConversation}
         onHistoryOpen={onHistoryOpen}
       />
@@ -171,44 +178,30 @@ export function ConversationView({
         ref={scrollContainerRef}
         className="chat-messages-scroll px-5 py-4 flex flex-col gap-3 flex-1 min-h-0 overflow-y-auto"
       >
-        {messages.map((msg, i) => {
-          const isLastAssistant =
-            isGenerating &&
-            i === messages.length - 1 &&
-            msg.role === 'assistant';
+        {flow.renderItems.map(
+          ({ message, index, isStreaming, isThinking, hide }) => {
+            if (hide) return null;
 
-          // Hide the empty assistant placeholder; the TypingIndicator
-          // already covers this visual state. When thinking content is
-          // present, render the bubble so the ThinkingBlock is visible.
-          if (isLastAssistant && !msg.content && !msg.thinkingContent)
-            return null;
-
-          return (
-            <ChatBubble
-              key={msg.id}
-              role={msg.role}
-              content={msg.content}
-              quotedText={msg.quotedText}
-              index={i}
-              isStreaming={isLastAssistant}
-              imagePaths={msg.imagePaths}
-              onImagePreview={onImagePreview}
-              errorKind={msg.errorKind}
-              thinkingContent={msg.thinkingContent}
-              isThinking={
-                isLastAssistant && !msg.content && !!msg.thinkingContent
-              }
-            />
-          );
-        })}
+            return (
+              <ChatBubble
+                key={message.id}
+                role={message.role}
+                content={message.content}
+                quotedText={message.quotedText}
+                index={index}
+                isStreaming={isStreaming}
+                imagePaths={message.imagePaths}
+                onImagePreview={onImagePreview}
+                errorKind={message.errorKind}
+                thinkingContent={message.thinkingContent}
+                isThinking={isThinking}
+              />
+            );
+          },
+        )}
 
         {/* Typing indicator (pulsing dots) shown before first token arrives */}
-        {isGenerating &&
-        messages[messages.length - 1]?.role === 'assistant' &&
-        !messages[messages.length - 1]?.content &&
-        !messages[messages.length - 1]?.thinkingContent ? (
-          <TypingIndicator />
-        ) : null}
+        {flow.showTypingIndicator ? <TypingIndicator /> : null}
       </div>
 
       <motion.div

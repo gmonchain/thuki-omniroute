@@ -1,23 +1,11 @@
 import { memo } from 'react';
 import { motion } from 'framer-motion';
 import type { Message } from '../../hooks/useAiChat';
+import { selectCompactConversationPillFlow } from '../conversationFlow';
 
 interface CompactConversationPillProps {
   messages: Message[];
   isGenerating: boolean;
-}
-
-function getLatestAssistantMessage(messages: Message[]): Message | undefined {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role === 'assistant') return messages[i];
-  }
-  return undefined;
-}
-
-function toPreviewText(text: string, maxLength = 72): string {
-  const normalized = text.replace(/\s+/g, ' ').trim();
-  if (normalized.length <= maxLength) return normalized;
-  return `${normalized.slice(0, maxLength).trimEnd()}…`;
 }
 
 const LoadingDots = memo(function LoadingDots() {
@@ -54,28 +42,16 @@ export const CompactConversationPill = memo(function CompactConversationPill({
   messages,
   isGenerating,
 }: CompactConversationPillProps) {
-  const latestAssistant = getLatestAssistantMessage(messages);
-  const latestContent = latestAssistant?.content?.trim();
-  const latestThinking = latestAssistant?.thinkingContent?.trim();
-
-  const preview = latestContent || latestThinking || '';
-  const displayText = preview
-    ? toPreviewText(preview)
-    : isGenerating
-      ? 'Thinking...'
-      : 'Open conversation';
-
-  const statusTone = latestAssistant?.errorKind
-    ? '#fca5a5'
-    : isGenerating
-      ? '#ffb089'
-      : 'rgba(255,255,255,0.92)';
+  const flow = selectCompactConversationPillFlow({
+    messages,
+    isGenerating,
+  });
 
   return (
     <div
       style={{
-        width: 384,
-        height: 48,
+        width: 290,
+        height: 45,
         marginRight: 230,
         pointerEvents: 'none',
         display: 'grid',
@@ -109,21 +85,11 @@ export const CompactConversationPill = memo(function CompactConversationPill({
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            background: latestAssistant?.errorKind
-              ? 'rgba(239,68,68,0.16)'
-              : isGenerating
-                ? 'rgba(255,141,92,0.16)'
-                : 'rgba(255,255,255,0.08)',
-            border: `1px solid ${
-              latestAssistant?.errorKind
-                ? 'rgba(239,68,68,0.28)'
-                : isGenerating
-                  ? 'rgba(255,141,92,0.22)'
-                  : 'rgba(255,255,255,0.08)'
-            }`,
+            background: flow.indicatorBackground,
+            border: `1px solid ${flow.indicatorBorder}`,
           }}
         >
-          {latestAssistant?.errorKind ? (
+          {flow.showsErrorDot ? (
             <div
               style={{
                 width: 6,
@@ -132,7 +98,7 @@ export const CompactConversationPill = memo(function CompactConversationPill({
                 background: '#ef4444',
               }}
             />
-          ) : isGenerating ? (
+          ) : flow.showsLoadingDots ? (
             <LoadingDots />
           ) : (
             <div
@@ -152,10 +118,10 @@ export const CompactConversationPill = memo(function CompactConversationPill({
         style={{
           display: 'block',
           width: '100%',
-          fontSize: 13,
+          fontSize: 12,
           lineHeight: 1.25,
           fontWeight: 500,
-          color: statusTone,
+          color: flow.textColor,
           whiteSpace: 'nowrap',
           overflow: 'hidden',
           textOverflow: 'ellipsis',
@@ -163,11 +129,8 @@ export const CompactConversationPill = memo(function CompactConversationPill({
           textAlign: 'center',
         }}
       >
-        {displayText}
+        {flow.displayText}
       </span>
-
-      {/* Right spacer — keeps grid balanced */}
-      <div aria-hidden="true" />
     </div>
   );
 });
