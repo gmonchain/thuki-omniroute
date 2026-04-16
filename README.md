@@ -17,6 +17,12 @@
 
 Thuki is a powerful floating AI assistant designed specifically for macOS that seamlessly integrates into your workflow. Built with Tauri, React, and Rust, it provides instant access to AI capabilities without disrupting your focus.
 
+### Demo
+
+https://github.com/user-attachments/assets/e0d3c5b8-7a5e-4d3e-9e5e-5c8f3e7b5e3d/demo.mov
+
+Or view locally: [demo.mov](./demo.mov)
+
 ### What Makes Thuki Special?
 
 - **🎯 Always Accessible**: Double-tap Control (⌃) from anywhere to summon your AI assistant, tap Option (⌥) to toggle compact mode
