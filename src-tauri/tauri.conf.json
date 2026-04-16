@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "thukii",
-  "version": "4.1.0",
-  "identifier": "com.quietnode.thukii",
+  "productName": "thukiii",
+  "version": "4.2.0",
+  "identifier": "com.quietnode.thukiii",
   "build": {
     "beforeDevCommand": "bun run frontend:dev",
     "devUrl": "http://localhost:1420",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "thukii",
+        "title": "thukiii",
         "width": 600,
         "height": 700,
         "resizable": true,

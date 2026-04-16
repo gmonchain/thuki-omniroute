@@ -4227,8 +4227,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "thukii"
-version = "4.1.0"
+name = "thukiii"
+version = "4.2.0"
 dependencies = [
  "base64 0.22.1",
  "core-foundation 0.10.1",
