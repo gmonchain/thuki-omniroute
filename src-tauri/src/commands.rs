@@ -312,6 +312,24 @@ pub fn load_api_key() -> String {
         .unwrap_or_else(|| DEFAULT_API_KEY.to_string())
 }
 
+/// Loads API configuration from database into environment variables at startup.
+/// This ensures persisted settings are available for the current session.
+pub fn init_api_config_from_db(conn: &rusqlite::Connection) {
+    // Load endpoint from database
+    if let Ok(Some(endpoint)) = crate::database::get_config(conn, "api_endpoint") {
+        if !endpoint.trim().is_empty() {
+            std::env::set_var(API_ENDPOINT_ENV_VAR, endpoint.trim());
+        }
+    }
+
+    // Load API key from database
+    if let Ok(Some(api_key)) = crate::database::get_config(conn, "api_key") {
+        if !api_key.trim().is_empty() {
+            std::env::set_var(API_KEY_ENV_VAR, api_key.trim());
+        }
+    }
+}
+
 /// Resolves the effective endpoint for the current runtime configuration.
 ///
 /// When callers still pass a URL derived from `DEFAULT_API_ENDPOINT`, this
@@ -668,12 +686,21 @@ pub fn get_api_config() -> serde_json::Value {
 /// Updates the runtime API endpoint used for subsequent requests.
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg_attr(not(coverage), tauri::command)]
-pub fn set_api_endpoint(endpoint: String) -> Result<serde_json::Value, String> {
+pub fn set_api_endpoint(
+    endpoint: String,
+    db: tauri::State<'_, crate::history::Database>,
+) -> Result<serde_json::Value, String> {
     let trimmed = endpoint.trim();
     if trimmed.is_empty() {
         return Err("API endpoint cannot be empty".to_string());
     }
 
+    // Save to database for persistence
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    crate::database::set_config(&conn, "api_endpoint", trimmed)
+        .map_err(|e| format!("Failed to save endpoint to database: {}", e))?;
+
+    // Also set in environment for current session
     std::env::set_var(API_ENDPOINT_ENV_VAR, trimmed);
     Ok(api_config_value())
 }
@@ -681,12 +708,21 @@ pub fn set_api_endpoint(endpoint: String) -> Result<serde_json::Value, String> {
 /// Updates the runtime API key used for subsequent requests.
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg_attr(not(coverage), tauri::command)]
-pub fn set_api_key(api_key: String) -> Result<serde_json::Value, String> {
+pub fn set_api_key(
+    api_key: String,
+    db: tauri::State<'_, crate::history::Database>,
+) -> Result<serde_json::Value, String> {
     let trimmed = api_key.trim();
     if trimmed.is_empty() {
         return Err("API key cannot be empty".to_string());
     }
 
+    // Save to database for persistence
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    crate::database::set_config(&conn, "api_key", trimmed)
+        .map_err(|e| format!("Failed to save API key to database: {}", e))?;
+
+    // Also set in environment for current session
     std::env::set_var(API_KEY_ENV_VAR, trimmed);
     Ok(api_config_value())
 }
@@ -2347,5 +2383,63 @@ mod tests {
         assert!(chunks
             .iter()
             .any(|c| matches!(c, StreamChunk::Token(t) if t == "Hello")));
+    }
+
+    #[test]
+    fn init_api_config_from_db_loads_endpoint_and_key() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var(API_ENDPOINT_ENV_VAR);
+        std::env::remove_var(API_KEY_ENV_VAR);
+
+        let conn = crate::database::open_in_memory().unwrap();
+        crate::database::set_config(&conn, "api_endpoint", "http://custom:8080/v1").unwrap();
+        crate::database::set_config(&conn, "api_key", "sk-custom-key").unwrap();
+
+        init_api_config_from_db(&conn);
+
+        assert_eq!(load_api_endpoint(), "http://custom:8080/v1");
+        assert_eq!(load_api_key(), "sk-custom-key");
+
+        std::env::remove_var(API_ENDPOINT_ENV_VAR);
+        std::env::remove_var(API_KEY_ENV_VAR);
+    }
+
+    #[test]
+    fn init_api_config_from_db_skips_empty_values() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var(API_ENDPOINT_ENV_VAR);
+        std::env::remove_var(API_KEY_ENV_VAR);
+
+        let conn = crate::database::open_in_memory().unwrap();
+        crate::database::set_config(&conn, "api_endpoint", "   ").unwrap();
+        crate::database::set_config(&conn, "api_key", "").unwrap();
+
+        init_api_config_from_db(&conn);
+
+        // Should fall back to defaults since DB values are empty
+        assert_eq!(load_api_endpoint(), DEFAULT_API_ENDPOINT);
+        assert_eq!(load_api_key(), DEFAULT_API_KEY);
+
+        std::env::remove_var(API_ENDPOINT_ENV_VAR);
+        std::env::remove_var(API_KEY_ENV_VAR);
+    }
+
+    #[test]
+    fn init_api_config_from_db_handles_missing_keys() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var(API_ENDPOINT_ENV_VAR);
+        std::env::remove_var(API_KEY_ENV_VAR);
+
+        let conn = crate::database::open_in_memory().unwrap();
+        // Don't set any config values
+
+        init_api_config_from_db(&conn);
+
+        // Should fall back to defaults
+        assert_eq!(load_api_endpoint(), DEFAULT_API_ENDPOINT);
+        assert_eq!(load_api_key(), DEFAULT_API_KEY);
+
+        std::env::remove_var(API_ENDPOINT_ENV_VAR);
+        std::env::remove_var(API_KEY_ENV_VAR);
     }
 }

@@ -1,5 +1,5 @@
 {
-  "name": "thukiii",
+  "name": "brokii",
   "version": "0.10.0",
   "description": "A floating AI secretary for macOS, powered by local Ollama models",
   "license": "Apache-2.0",
@@ -14,7 +14,7 @@
     "frontend:dev": "vite",
     "build:frontend": "tsc && vite build",
     "build:backend": "tauri build --bundles app",
-    "build:all": "bun run build:frontend && bun run build:backend",
+    "build:dmg": "bun run build:frontend && bun run build:backend",
     "preview": "vite preview",
     "tauri": "tauri",
     "lint:frontend": "eslint src",

@@ -175,6 +175,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "brokii"
+version = "4.2.0"
+dependencies = [
+ "base64 0.22.1",
+ "core-foundation 0.10.1",
+ "core-graphics",
+ "dirs",
+ "dotenvy",
+ "futures-util",
+ "image",
+ "mockito",
+ "reqwest",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-nspanel",
+ "tokio",
+ "tokio-util",
+ "uuid",
+]
+
+[[package]]
 name = "brotli"
 version = "8.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4247,30 +4271,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
-]
-
-[[package]]
-name = "thukiii"
-version = "4.2.0"
-dependencies = [
- "base64 0.22.1",
- "core-foundation 0.10.1",
- "core-graphics",
- "dirs",
- "dotenvy",
- "futures-util",
- "image",
- "mockito",
- "reqwest",
- "rusqlite",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-nspanel",
- "tokio",
- "tokio-util",
- "uuid",
 ]
 
 [[package]]

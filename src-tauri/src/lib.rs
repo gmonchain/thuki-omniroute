@@ -856,6 +856,9 @@ pub fn run() {
             app.manage(commands::ConversationHistory::new());
             app.manage(commands::SystemPrompt(commands::load_system_prompt()));
 
+            // Load API config from database into environment variables
+            commands::init_api_config_from_db(&db_conn);
+
             // Load model config from database (with env variable fallback)
             app.manage(commands::load_model_config(&db_conn));
 

@@ -21,21 +21,17 @@ export const CompactConversationPill = memo(function CompactConversationPill({
   return (
     <motion.div
       initial={{ width: 0, opacity: 0 }}
-      animate={{ width: 290, opacity: 1 }}
-      exit={{ opacity: 0 }}
-      transition={(key) => {
-        if (key === 'exit') {
-          return {
-            duration: 0,
-          };
-        }
-        return {
+      animate={{
+        width: 290,
+        opacity: 1,
+        transition: {
           type: 'spring',
           stiffness: 300,
           damping: 25,
           duration: 0.4,
-        };
+        },
       }}
+      exit={{ opacity: 0, transition: { duration: 0 } }}
       style={{
         height: 45,
         marginRight: 230,

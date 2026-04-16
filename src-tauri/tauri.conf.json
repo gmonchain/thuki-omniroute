@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "thukiii",
+  "productName": "brokii",
   "version": "4.2.0",
-  "identifier": "com.quietnode.thukiii",
+  "identifier": "com.quietnode.brokii",
   "build": {
     "beforeDevCommand": "bun run frontend:dev",
     "devUrl": "http://localhost:1420",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "thukiii",
+        "title": "brokii",
         "width": 600,
         "height": 700,
         "resizable": true,
