@@ -221,9 +221,9 @@ describe('OnboardingView', () => {
     expect(invoke).toHaveBeenCalledWith('open_screen_recording_settings');
   });
 
-  it('shows quit and reopen immediately after opening screen recording settings', async () => {
+  it('shows continue immediately after opening screen recording settings', async () => {
     setupPermissions(true);
-    render(<PermissionsStep />);
+    render(<PermissionsStep onNext={vi.fn()} />);
     await act(async () => {});
 
     await act(async () => {
@@ -233,16 +233,17 @@ describe('OnboardingView', () => {
     });
 
     expect(
-      screen.getByRole('button', { name: /quit.*reopen/i }),
+      screen.getByRole('button', { name: /continue to api setup/i }),
     ).toBeInTheDocument();
     expect(
       screen.queryByRole('button', { name: /open screen recording settings/i }),
     ).toBeNull();
   });
 
-  it('clicking quit and reopen invokes quit_and_relaunch', async () => {
+  it('clicking continue after opening screen recording settings calls onNext', async () => {
+    const onNext = vi.fn();
     setupPermissions(true);
-    render(<PermissionsStep />);
+    render(<PermissionsStep onNext={onNext} />);
     await act(async () => {});
 
     await act(async () => {
@@ -252,10 +253,13 @@ describe('OnboardingView', () => {
     });
 
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /quit.*reopen/i }));
+      fireEvent.click(
+        screen.getByRole('button', { name: /continue to api setup/i }),
+      );
     });
 
-    expect(invoke).toHaveBeenCalledWith('quit_and_relaunch');
+    expect(onNext).toHaveBeenCalledTimes(1);
+    expect(invoke).not.toHaveBeenCalledWith('quit_and_relaunch');
   });
 
   it('shows screen recording step info', async () => {

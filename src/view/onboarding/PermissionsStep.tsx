@@ -142,9 +142,9 @@ const Spinner = () => (
  * (Accessibility and Screen Recording) have not yet been granted.
  *
  * Follows a sequential flow: Accessibility first (polls until granted,
- * no restart needed), then Screen Recording (registers app via
- * CGRequestScreenCaptureAccess, polls TCC until granted, then prompts
- * quit+reopen since macOS requires a restart for the permission to take effect).
+ * no restart needed), then Screen Recording (registers the app via
+ * CGRequestScreenCaptureAccess, opens System Settings, and lets the user
+ * continue manually once the permission has been enabled).
  *
  * Visual direction: Warm Ambient: dark base with a warm orange radial glow.
  * The outer container is transparent so the rounded panel corners are visible
@@ -220,9 +220,9 @@ export function PermissionsStep({ onNext }: PermissionsStepProps) {
     setScreenRecordingStatus('settings-opened');
   }, []);
 
-  const handleQuitAndRelaunch = useCallback(async () => {
-    await invoke('quit_and_relaunch');
-  }, []);
+  const handleContinue = useCallback(() => {
+    onNext?.();
+  }, [onNext]);
 
   const accessibilityGranted = accessibilityStatus === 'granted';
   const isAxRequesting = accessibilityStatus === 'requesting';
@@ -421,7 +421,8 @@ export function PermissionsStep({ onNext }: PermissionsStepProps) {
           </>
         )}
 
-        {/* Step 2 CTAs: Open Settings, then explicitly relaunch */}
+        {/* Step 2 CTAs: Open Settings, then continue manually */}
+        {/* Step 2 CTAs: Open Settings, then continue manually */}
         {accessibilityGranted && (
           <>
             {!hasOpenedScreenRecordingSettings && (
@@ -435,10 +436,10 @@ export function PermissionsStep({ onNext }: PermissionsStepProps) {
             {hasOpenedScreenRecordingSettings && (
               <>
                 <CTAButton
-                  onClick={handleQuitAndRelaunch}
-                  aria-label="Quit and Reopen Thuki"
+                  onClick={handleContinue}
+                  aria-label="Continue to API Setup"
                 >
-                  Quit & Reopen Thuki
+                  Continue
                 </CTAButton>
                 <p
                   style={{
@@ -449,8 +450,8 @@ export function PermissionsStep({ onNext }: PermissionsStepProps) {
                     margin: 0,
                   }}
                 >
-                  Enable Screen Recording in System Settings, then quit and
-                  reopen Thuki to continue to API setup.
+                  After enabling Screen Recording in System Settings, click
+                  Continue to move on to API setup.
                 </p>
               </>
             )}
