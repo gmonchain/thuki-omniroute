@@ -462,7 +462,7 @@ function App() {
   );
 
   /**
-   * Moves the overlay into an exit phase. The actual Tauri window hide call is
+   * Requests the overlay to hide. The actual window hide is intentionally
    * deferred until Framer Motion finishes the exit transition.
    */
   const requestHideOverlay = useCallback(() => {
@@ -477,6 +477,10 @@ function App() {
       window.clearTimeout(compactTransitionTimerRef.current);
       compactTransitionTimerRef.current = null;
     }
+    // Reset mouse events if closing from compact mode
+    if (compactMode === 'compact') {
+      void invoke('set_ignore_mouse_events', { ignore: false });
+    }
     setCompactMode('expanded');
     preCompactWindowFrameRef.current = null;
     setAttachedImages((prev) => {
@@ -489,7 +493,7 @@ function App() {
       }
       return 'hiding';
     });
-  }, [cancel]);
+  }, [cancel, compactMode]);
 
   /** Ref attached to the chat-mode history dropdown for click-outside detection. */
   const historyDropdownRef = useRef<HTMLDivElement>(null);
@@ -1719,7 +1723,7 @@ function App() {
       } w-screen bg-transparent overflow-visible`}
       style={
         isCompactMode || isCollapsingToCompact
-          ? { height: 48, pointerEvents: 'none' }
+          ? { height: 48 }
           : { height: '100vh' }
       }
     >
@@ -1730,6 +1734,7 @@ function App() {
               key={`compact-${sessionId}`}
               messages={flow.visibleMessages}
               isGenerating={flow.isBusy}
+              onClick={handleToggleCompactMode}
             />
           ) : (
             <motion.div

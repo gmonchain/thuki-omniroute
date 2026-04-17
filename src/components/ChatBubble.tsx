@@ -141,9 +141,9 @@ export function ChatBubble({
       {isUser ? (
         /* User bubble — max-width capped, stacks bubble + action bar */
         <div className="flex flex-col max-w-[80%]">
-          <div className="chat-bubble chat-bubble-user relative px-4 py-2.5 text-sm leading-relaxed select-text rounded-2xl rounded-br-md">
+          <div className="chat-bubble chat-bubble-user relative px-4 py-2.5 text-xs leading-relaxed select-text rounded-2xl rounded-br-md">
             {quotedText && (
-              <p className="border-l-2 border-white/40 pl-2 mb-2 italic text-xs text-white/60 whitespace-pre-wrap">
+              <p className="border-l-2 border-white/40 pl-2 mb-2 italic text-[10px] text-white/60 whitespace-pre-wrap">
                 {formatQuotedText(
                   quotedText,
                   quote.maxDisplayLines,
@@ -185,7 +185,7 @@ export function ChatBubble({
       ) : (
         /* AI plain text — full width, no bubble chrome */
         <div className="flex flex-col w-full">
-          <div className="text-sm leading-relaxed select-text py-1">
+          <div className="text-xs leading-relaxed select-text py-1">
             {thinkingContent && (
               <ThinkingBlock
                 thinkingContent={thinkingContent}

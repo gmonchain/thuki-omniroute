@@ -1,5 +1,5 @@
-import { render, screen } from '@testing-library/react';
-import { describe, it, expect } from 'vitest';
+import { render, screen, fireEvent } from '@testing-library/react';
+import { describe, it, expect, vi } from 'vitest';
 import { CompactConversationPill } from './CompactConversationPill';
 import type { Message } from '../../hooks/useAiChat';
 
@@ -94,5 +94,48 @@ describe('CompactConversationPill', () => {
         'This is a very long assistant response preview that should be truncated…',
       ),
     ).toBeInTheDocument();
+  });
+
+  it('calls onClick when clicked if onClick is provided', () => {
+    const onClick = vi.fn();
+    const { container } = render(
+      <CompactConversationPill
+        messages={[makeMessage({ role: 'assistant', content: 'Hello' })]}
+        isGenerating={false}
+        onClick={onClick}
+      />,
+    );
+
+    const pill = container.firstChild as HTMLElement;
+    fireEvent.click(pill);
+    expect(onClick).toHaveBeenCalledTimes(1);
+  });
+
+  it('has pointer cursor when onClick is provided', () => {
+    const onClick = vi.fn();
+    const { container } = render(
+      <CompactConversationPill
+        messages={[makeMessage({ role: 'assistant', content: 'Hello' })]}
+        isGenerating={false}
+        onClick={onClick}
+      />,
+    );
+
+    const pill = container.firstChild as HTMLElement;
+    expect(pill.style.cursor).toBe('pointer');
+    expect(pill.style.pointerEvents).toBe('auto');
+  });
+
+  it('has no pointer events when onClick is not provided', () => {
+    const { container } = render(
+      <CompactConversationPill
+        messages={[makeMessage({ role: 'assistant', content: 'Hello' })]}
+        isGenerating={false}
+      />,
+    );
+
+    const pill = container.firstChild as HTMLElement;
+    expect(pill.style.cursor).toBe('default');
+    expect(pill.style.pointerEvents).toBe('none');
   });
 });
